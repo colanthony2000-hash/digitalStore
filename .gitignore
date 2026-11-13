@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+storage/public_uploads/*
+storage/protected_products/*
+!storage/public_uploads/.gitkeep
+!storage/protected_products/.gitkeep

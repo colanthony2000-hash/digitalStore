@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Playfair Display", Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ivory: #FAF8F4;
+  --color-parchment: #F3EEE4;
+  --color-linen: #EBE4D6;
+  --color-ink: #171A21;
+  --color-ink-muted: #4A505C;
+  --color-ink-subtle: #6D7380;
+  --color-navy: #0A264A;
+  --color-navy-deep: #061830;
+  --color-gold: #B88329;
+  --color-gold-soft: #D4A146;
+  --color-rule: #E4DDD0;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    color: #171A21;
+    background-color: #FAF8F4;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+    letter-spacing: -0.015em;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tactile 3D Product Mockup Perspective Utilities */
+.mockup-stage {
+  perspective: 1100px;
+}
+
+.mockup-book-frame {
+  transform: rotateY(-12deg) rotateX(2deg);
+  transform-style: preserve-3d;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow:
+    -10px 14px 28px -8px rgba(10, 26, 48, 0.24),
+    -3px 4px 10px -2px rgba(10, 26, 48, 0.14);
+}
+
+.group:hover .mockup-book-frame,
+.mockup-stage:hover .mockup-book-frame {
+  transform: rotateY(-5deg) rotateX(1deg) translateY(-4px);
+  box-shadow:
+    -14px 20px 36px -10px rgba(10, 26, 48, 0.28),
+    -4px 6px 14px -2px rgba(10, 26, 48, 0.16);
+}
+
+.mockup-workbook-frame {
+  transform: rotateY(-6deg) rotateX(1.5deg);
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow:
+    6px 6px 0 0 #EBE4D6,
+    7px 7px 0 0 #D6CEBE,
+    -8px 16px 30px -10px rgba(10, 26, 48, 0.22);
+}
+
+.group:hover .mockup-workbook-frame,
+.mockup-stage:hover .mockup-workbook-frame {
+  transform: rotateY(-2deg) rotateX(0.5deg) translateY(-4px);
+  box-shadow:
+    8px 8px 0 0 #EBE4D6,
+    9px 9px 0 0 #D6CEBE,
+    -10px 22px 36px -10px rgba(10, 26, 48, 0.26);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  .mockup-book-frame,
+  .mockup-workbook-frame {
+    transform: none !important;
+  }
+}

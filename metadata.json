@@ -1,0 +1,6 @@
+{
+  "name": "Jeneconk Digital Store",
+  "description": "Official digital products marketplace by Jeneconk Integrated Global Solutions Limited offering planners, spreadsheets, educational toolkits, AI prompt systems, e-books, and Canva templates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
