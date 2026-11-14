@@ -196,63 +196,57 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
   }
 });
 
-async function fulfillVerifiedOrder(reference: string, paidAmount: number, paidCurrency: string) {
-  const found = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.paystackReference, reference))
-    .limit(1);
+export async function fulfillVerifiedOrder(reference: string, paidAmount: number, paidCurrency: string) {
+  return db.transaction(async (tx) => {
+    const [order] = await tx.select().from(orders).where(eq(orders.paystackReference, reference)).limit(1);
+    if (!order) return null;
 
-  if (found.length === 0) return null;
-  const order = found[0];
-
-  if (order.paymentStatus === 'paid') {
-    const items = await db
-      .select()
-      .from(orderItems)
-      .where(eq(orderItems.orderId, order.id));
-    return { order, items, alreadyVerified: true };
-  }
-
-  if (paidAmount < order.totalMinor || paidCurrency.toUpperCase() !== order.currency.toUpperCase()) {
-    throw new Error('Verified payment amount or currency mismatch.');
-  }
-
-  const [updatedOrder] = await db
-    .update(orders)
-    .set({
-      paymentStatus: 'paid',
-      orderStatus: 'completed',
-      fulfilmentStatus: 'fulfilled',
-      verifiedAt: new Date(),
-    })
-    .where(eq(orders.id, order.id))
-    .returning();
-
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, order.id));
-
-  for (const item of items) {
-    if (item.productId) {
-      await db
-        .update(products)
-        .set({
-          verifiedSalesCount: sql`${products.verifiedSalesCount} + 1`,
-        })
-        .where(eq(products.id, item.productId));
+    if (order.paymentStatus === 'paid') {
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      return { order, items, alreadyVerified: true };
     }
-  }
 
-  if (order.discountCode) {
-    await db
-      .update(discountCodes)
-      .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
-      .where(eq(discountCodes.code, order.discountCode));
-  }
+    if (!['pending', 'failed'].includes(order.paymentStatus)) {
+      throw new Error(`Order cannot be fulfilled from payment state: ${order.paymentStatus}.`);
+    }
+    if (paidAmount !== order.totalMinor || paidCurrency.toUpperCase() !== order.currency.toUpperCase()) {
+      throw new Error('Verified payment amount or currency mismatch.');
+    }
 
-  return { order: updatedOrder, items, alreadyVerified: false };
+    // The conditional update makes fulfillment idempotent if webhook and browser/admin verification race.
+    const [updatedOrder] = await tx
+      .update(orders)
+      .set({
+        paymentStatus: 'paid',
+        orderStatus: 'completed',
+        fulfilmentStatus: 'fulfilled',
+        verifiedAt: new Date(),
+      })
+      .where(and(eq(orders.id, order.id), inArray(orders.paymentStatus, ['pending', 'failed'])))
+      .returning();
+
+    if (!updatedOrder) {
+      const [current] = await tx.select().from(orders).where(eq(orders.id, order.id)).limit(1);
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      if (current?.paymentStatus === 'paid') return { order: current, items, alreadyVerified: true };
+      throw new Error('Order payment state changed during verification; no fulfillment was applied.');
+    }
+
+    const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+    for (const item of items) {
+      if (item.productId) {
+        await tx.update(products)
+          .set({ verifiedSalesCount: sql`${products.verifiedSalesCount} + 1` })
+          .where(eq(products.id, item.productId));
+      }
+    }
+    if (order.discountCode) {
+      await tx.update(discountCodes)
+        .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
+        .where(eq(discountCodes.code, order.discountCode));
+    }
+    return { order: updatedOrder, items, alreadyVerified: false };
+  });
 }
 
 router.get('/checkout/verify/:reference', async (req, res) => {

@@ -114,34 +114,41 @@ export function AdminCustomersTab({
       onToast('Enter a reason before suspending this account.');
       return;
     }
-    setActionBusy(true);
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...(await getAuthHeaders()),
-      };
-      const res = await fetch(`/api/admin/customers/${detail.customer.id}/status`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({
-          accountStatus: nextStatus,
-          reason:
-            nextStatus === 'suspended'
-              ? suspendReason.trim()
-              : 'Reactivated by support operations',
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        onToast(json.error || 'Unable to update status.');
-        return;
+    const execute = async () => {
+      setActionBusy(true);
+      try {
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        };
+        const res = await fetch(`/api/admin/customers/${detail.customer.id}/status`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            accountStatus: nextStatus,
+            reason:
+              nextStatus === 'suspended'
+                ? suspendReason.trim()
+                : 'Reactivated by support operations',
+          }),
+        });
+        const json = await res.json();
+        if (res.status === 403 && json.code === 'REAUTH_REQUIRED') {
+          onRequireReauth(execute);
+          return;
+        }
+        if (!res.ok) {
+          onToast(json.error || 'Unable to update status.');
+          return;
+        }
+        setSuspendReason('');
+        onToast(`Account ${detail.customer.email} set to ${nextStatus}.`);
+        await Promise.all([loadDetail(detail.customer.id), onRefresh()]);
+      } finally {
+        setActionBusy(false);
       }
-      setSuspendReason('');
-      onToast(`Account ${detail.customer.email} set to ${nextStatus}.`);
-      await Promise.all([loadDetail(detail.customer.id), onRefresh()]);
-    } finally {
-      setActionBusy(false);
-    }
+    };
+    await execute();
   };
 
   const handleSaveNotes = async () => {
@@ -171,30 +178,37 @@ export function AdminCustomersTab({
 
   const handleTriggerReset = async () => {
     if (!detail) return;
-    setActionBusy(true);
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...(await getAuthHeaders()),
-      };
-      const res = await fetch(
-        `/api/admin/customers/${detail.customer.id}/trigger-password-reset`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ reason: 'Support triggered password reset' }),
+    const execute = async () => {
+      setActionBusy(true);
+      try {
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        };
+        const res = await fetch(
+          `/api/admin/customers/${detail.customer.id}/trigger-password-reset`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ reason: 'Support triggered password reset' }),
+          }
+        );
+        const json = await res.json();
+        if (res.status === 403 && json.code === 'REAUTH_REQUIRED') {
+          onRequireReauth(execute);
+          return;
         }
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        onToast(json.error || 'Unable to send password reset.');
-        return;
+        if (!res.ok) {
+          onToast(json.error || 'Unable to send password reset.');
+          return;
+        }
+        onToast(json.message);
+        await loadDetail(detail.customer.id);
+      } finally {
+        setActionBusy(false);
       }
-      onToast(json.message);
-      await loadDetail(detail.customer.id);
-    } finally {
-      setActionBusy(false);
-    }
+    };
+    await execute();
   };
 
   const handleRevokeSessions = async () => {

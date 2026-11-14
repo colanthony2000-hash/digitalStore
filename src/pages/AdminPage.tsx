@@ -1325,6 +1325,7 @@ export function AdminPage() {
               getAuthHeaders={getAuthHeaders}
               onToast={showToast}
               onRefresh={loadAdminData}
+              onRequireReauth={(fn) => setReauthPendingAction(() => fn)}
             />
           )}
 

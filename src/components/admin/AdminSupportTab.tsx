@@ -23,6 +23,7 @@ interface AdminSupportTabProps {
   getAuthHeaders: () => Promise<Record<string, string>>;
   onToast: (msg: string) => void;
   onRefresh: () => Promise<void>;
+  onRequireReauth: (retry: () => Promise<void>) => void;
 }
 
 const CASE_CATEGORIES = [
@@ -49,6 +50,7 @@ export function AdminSupportTab({
   getAuthHeaders,
   onToast,
   onRefresh,
+  onRequireReauth,
 }: AdminSupportTabProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -182,34 +184,39 @@ export function AdminSupportTab({
       | 'reactivate_customer'
   ) => {
     if (!selectedCase) return;
-    setBusy(true);
-    setActionResultUrl(null);
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...(await getAuthHeaders()),
-      };
-      const res = await fetch(`/api/admin/support-cases/${selectedCase.id}/actions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          action,
-          reason: resolutionDraft || `Executed ${action} on ${selectedCase.caseReference}`,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        onToast(json.error || 'Action could not be completed.');
-        return;
+    const execute = async () => {
+      setBusy(true);
+      setActionResultUrl(null);
+      try {
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        };
+        const res = await fetch(`/api/admin/support-cases/${selectedCase.id}/actions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            action,
+            reason: resolutionDraft || `Executed ${action} on ${selectedCase.caseReference}`,
+          }),
+        });
+        const json = await res.json();
+        if (res.status === 403 && json.code === 'REAUTH_REQUIRED') {
+          onRequireReauth(execute);
+          return;
+        }
+        if (!res.ok) {
+          onToast(json.error || 'Action could not be completed.');
+          return;
+        }
+        if (json.downloadUrl) setActionResultUrl(json.downloadUrl);
+        onToast(json.message || 'Resolution action logged.');
+        await onRefresh();
+      } finally {
+        setBusy(false);
       }
-      if (json.downloadUrl) {
-        setActionResultUrl(json.downloadUrl);
-      }
-      onToast(json.message || 'Resolution action logged.');
-      await onRefresh();
-    } finally {
-      setBusy(false);
-    }
+    };
+    await execute();
   };
 
   return (
