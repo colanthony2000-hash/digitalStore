@@ -521,7 +521,8 @@ async function runSeed(): Promise<void> {
           value:
             'Receive new digital edition announcements, complimentary starter guides, and seasonal planning kits directly from Jeneconk Digital Store.',
         },
-        { key: 'support_email', value: 'support@jeneconk.com' },
+        { key: 'support_email', value: 'info@jeneconk.com' },
+        { key: 'business_email', value: 'business@jeneconk.com' },
         { key: 'whatsapp_number', value: '' },
         { key: 'pinterest_tag_id', value: '' },
         { key: 'ga_measurement_id', value: '' },

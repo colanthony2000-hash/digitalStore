@@ -22,12 +22,18 @@ import {
   supportEnquiries,
   users,
 } from '../db/schema.ts';
-import { requireAdmin, type AuthRequest } from '../middleware/auth.ts';
+import {
+  requireAdmin,
+  requirePermission,
+  requireRecentReauth,
+  type AuthRequest,
+} from '../middleware/auth.ts';
 import {
   createRateLimiter,
   isDownloadSigningSecretConfigured,
   recordAuditLog,
 } from '../lib/security.ts';
+import { getPermissionsForRole, hasPermission } from '../lib/rbac.ts';
 import {
   getGoogleAnalyticsConfig,
   getPaystackConfig,
@@ -84,7 +90,7 @@ const productFileUpload = multer({
 
 router.use(requireAdmin, adminLimiter);
 
-router.get('/overview', async (_req: AuthRequest, res) => {
+router.get('/overview', requirePermission('view_overview'), async (req: AuthRequest, res) => {
   try {
     const [
       allProducts,
@@ -189,43 +195,75 @@ router.get('/overview', async (_req: AuthRequest, res) => {
     const pinterest = getPinterestConfig(settingsMap.pinterest_tag_id);
     const ga = getGoogleAnalyticsConfig(settingsMap.ga_measurement_id);
 
+    const role = req.dbUser!.role;
+    const can = (permission: Parameters<typeof hasPermission>[1]) =>
+      hasPermission(role, permission);
+
+    const analyticsPayload = {
+      productViews,
+      outboundSelarClicks,
+      freeDownloads,
+      confirmedNativeOrders: paidOrders.length,
+      confirmedRevenueNgnKobo,
+      confirmedRevenueUsdCents,
+      trafficSources: Array.from(trafficSources.entries()).map(([source, count]) => ({
+        source,
+        count,
+      })),
+      geoDistribution: Array.from(geoCounts.entries()).map(([country, count]) => ({
+        country,
+        count,
+      })),
+      perProduct: Array.from(productStats.entries()).map(([slug, stats]) => ({
+        slug,
+        ...stats,
+      })),
+    };
+
     res.json({
-      analytics: {
-        productViews,
-        outboundSelarClicks,
-        freeDownloads,
-        confirmedNativeOrders: paidOrders.length,
-        confirmedRevenueNgnKobo,
-        confirmedRevenueUsdCents,
-        trafficSources: Array.from(trafficSources.entries()).map(([source, count]) => ({
-          source,
-          count,
-        })),
-        geoDistribution: Array.from(geoCounts.entries()).map(([country, count]) => ({
-          country,
-          count,
-        })),
-        perProduct: Array.from(productStats.entries()).map(([slug, stats]) => ({
-          slug,
-          ...stats,
-        })),
-      },
-      products: allProducts,
-      categories: allCategories,
-      bundles: hydratedBundles,
-      collections: allCollections,
-      ecosystemPlatforms: allPlatforms,
-      orders: allOrders.map((o) => ({
+      callerRole: role,
+      callerPermissions: getPermissionsForRole(role),
+      availableRoles: can('manage_roles')
+        ? [
+            { value: 'customer', label: 'Customer' },
+            { value: 'support', label: 'Customer Support' },
+            { value: 'finance', label: 'Finance & Transactions' },
+            { value: 'ops_monitor', label: 'Read-only Operations Monitor' },
+            { value: 'admin', label: 'Administrator' },
+          ]
+        : [],
+      analytics: can('view_reports')
+        ? {
+            ...analyticsPayload,
+            ...(can('view_orders')
+              ? {}
+              : { confirmedNativeOrders: 0, confirmedRevenueNgnKobo: 0, confirmedRevenueUsdCents: 0 }),
+          }
+        : {
+            ...analyticsPayload,
+            confirmedNativeOrders: 0,
+            confirmedRevenueNgnKobo: 0,
+            confirmedRevenueUsdCents: 0,
+            trafficSources: [],
+            geoDistribution: [],
+            perProduct: [],
+          },
+      products: can('manage_catalog') ? allProducts : [],
+      categories: can('manage_catalog') ? allCategories : [],
+      bundles: can('manage_catalog') ? hydratedBundles : [],
+      collections: can('manage_catalog') ? allCollections : [],
+      ecosystemPlatforms: can('manage_catalog') ? allPlatforms : [],
+      orders: can('view_orders') ? allOrders.map((o) => ({
         ...o,
         items: allOrderItems.filter((oi) => oi.orderId === o.id),
-      })),
-      customers: allUsers,
-      subscribers: allSubscribers,
-      enquiries: allEnquiries,
-      discounts: allDiscounts,
-      settings: settingsMap,
+      })) : [],
+      customers: can('view_customers') ? allUsers : [],
+      subscribers: can('manage_support_cases') ? allSubscribers : [],
+      enquiries: can('manage_support_cases') ? allEnquiries : [],
+      discounts: can('manage_catalog') ? allDiscounts : [],
+      settings: can('manage_settings') ? settingsMap : {},
       paystackEnvConfigured: paystack.secretKeyConfigured,
-      integrationStatus: {
+      integrationStatus: can('manage_settings') || can('view_infra') ? {
         paystack: {
           secretKeyConfigured: paystack.secretKeyConfigured,
           publicKeyConfigured: paystack.publicKeyConfigured,
@@ -242,8 +280,8 @@ router.get('/overview', async (_req: AuthRequest, res) => {
         downloadSigning: {
           configured: isDownloadSigningSecretConfigured(),
         },
-      },
-      auditLogs: recentAudits,
+      } : {},
+      auditLogs: can('manage_roles') ? recentAudits : [],
     });
   } catch (error) {
     console.error('Error loading admin overview:', error);
@@ -251,7 +289,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
   }
 });
 
-router.post('/products', async (req: AuthRequest, res) => {
+router.post('/products', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const body = req.body || {};
     if (!body.name || !body.slug) {
@@ -333,7 +371,7 @@ router.post('/products', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/products/:id', async (req: AuthRequest, res) => {
+router.patch('/products/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body || {};
@@ -423,7 +461,7 @@ router.patch('/products/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.delete('/products/:id', async (req: AuthRequest, res) => {
+router.delete('/products/:id', requirePermission('manage_catalog'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const [deleted] = await db
@@ -451,7 +489,7 @@ router.delete('/products/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/upload/image', imageUpload.single('file'), async (req: AuthRequest, res) => {
+router.post('/upload/image', requirePermission('manage_catalog'), imageUpload.single('file'), async (req: AuthRequest, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided.' });
@@ -472,6 +510,7 @@ router.post('/upload/image', imageUpload.single('file'), async (req: AuthRequest
 
 router.post(
   '/upload/product-file/:productId',
+  requirePermission('manage_catalog'),
   productFileUpload.single('file'),
   async (req: AuthRequest, res) => {
     try {
@@ -512,7 +551,7 @@ router.post(
   }
 );
 
-router.post('/categories', async (req: AuthRequest, res) => {
+router.post('/categories', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const body = req.body || {};
     const slug = String(body.slug || body.name || '')
@@ -549,7 +588,7 @@ router.post('/categories', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/categories/:id', async (req: AuthRequest, res) => {
+router.patch('/categories/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body || {};
@@ -585,7 +624,7 @@ router.patch('/categories/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/bundles', async (req: AuthRequest, res) => {
+router.post('/bundles', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const body = req.body || {};
     const slug = String(body.slug || body.name || '')
@@ -633,7 +672,7 @@ router.post('/bundles', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/bundles/:id', async (req: AuthRequest, res) => {
+router.patch('/bundles/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body || {};
@@ -707,7 +746,7 @@ router.patch('/bundles/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.delete('/bundles/:id', async (req: AuthRequest, res) => {
+router.delete('/bundles/:id', requirePermission('manage_catalog'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     await db.delete(bundles).where(eq(bundles.id, id));
@@ -724,7 +763,7 @@ router.delete('/bundles/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/collections/:id', async (req: AuthRequest, res) => {
+router.patch('/collections/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const { title, subtitle, productIds, isActive } = req.body || {};
@@ -756,7 +795,7 @@ router.patch('/collections/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/discounts', async (req: AuthRequest, res) => {
+router.post('/discounts', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const { code, discountType, value, maxUses } = req.body || {};
     const cleanCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
@@ -803,7 +842,7 @@ router.post('/discounts', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/discounts/:id', async (req: AuthRequest, res) => {
+router.patch('/discounts/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const { isActive } = req.body || {};
@@ -830,7 +869,7 @@ router.patch('/discounts/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/enquiries/:id', async (req: AuthRequest, res) => {
+router.patch('/enquiries/:id', requirePermission('manage_support_cases'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const { status } = req.body || {};
@@ -855,7 +894,7 @@ router.patch('/enquiries/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/orders/:id/refund', async (req: AuthRequest, res) => {
+router.post('/orders/:id/refund', requirePermission('manage_orders'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const [updated] = await db
@@ -881,7 +920,7 @@ router.post('/orders/:id/refund', async (req: AuthRequest, res) => {
   }
 });
 
-router.get('/orders/export', async (_req: AuthRequest, res) => {
+router.get('/orders/export', requirePermission('export_reports'), async (_req: AuthRequest, res) => {
   try {
     const allOrders = await db.select().from(orders).orderBy(desc(orders.createdAt));
     const header =
@@ -900,12 +939,24 @@ router.get('/orders/export', async (_req: AuthRequest, res) => {
   }
 });
 
-router.patch('/customers/:id/role', async (req: AuthRequest, res) => {
+router.patch('/customers/:id/role', requirePermission('manage_roles'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
-    const { role } = req.body || {};
-    if (role !== 'customer' && role !== 'admin') {
+    const { role, reason } = req.body || {};
+    const allowedRoles = new Set(['customer', 'support', 'finance', 'ops_monitor', 'admin']);
+    if (!Number.isSafeInteger(id) || id <= 0 || typeof role !== 'string' || !allowedRoles.has(role)) {
       return res.status(400).json({ error: 'Invalid role.' });
+    }
+    if (id === req.dbUser!.id) {
+      return res.status(400).json({ error: 'You cannot change your own role.' });
+    }
+    if (typeof reason !== 'string' || reason.trim().length < 3) {
+      return res.status(400).json({ error: 'A short audit reason is required.' });
+    }
+    const [target] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    if (!target) return res.status(404).json({ error: 'Customer not found.' });
+    if (target.role === 'super_admin') {
+      return res.status(403).json({ error: 'Super Administrator roles cannot be changed here.' });
     }
     const [updated] = await db
       .update(users)
@@ -919,7 +970,7 @@ router.patch('/customers/:id/role', async (req: AuthRequest, res) => {
       action: 'CHANGE_USER_ROLE',
       targetType: 'user',
       targetId: id,
-      details: `${updated.email} role changed to ${role}`,
+      details: `${updated.email} role changed from ${target.role} to ${role}. Reason: ${reason.trim().slice(0, 240)}`,
     });
 
     res.json({ customer: updated });
@@ -928,7 +979,7 @@ router.patch('/customers/:id/role', async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/ecosystem', async (req: AuthRequest, res) => {
+router.post('/ecosystem', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const body = req.body || {};
     if (!body.name) {
@@ -971,7 +1022,7 @@ router.post('/ecosystem', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/ecosystem/:id', async (req: AuthRequest, res) => {
+router.patch('/ecosystem/:id', requirePermission('manage_catalog'), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body || {};
@@ -1027,7 +1078,7 @@ router.patch('/ecosystem/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.delete('/ecosystem/:id', async (req: AuthRequest, res) => {
+router.delete('/ecosystem/:id', requirePermission('manage_catalog'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const [deleted] = await db
@@ -1052,7 +1103,7 @@ router.delete('/ecosystem/:id', async (req: AuthRequest, res) => {
   }
 });
 
-router.patch('/settings', async (req: AuthRequest, res) => {
+router.patch('/settings', requirePermission('manage_settings'), requireRecentReauth(), async (req: AuthRequest, res) => {
   try {
     const updates = req.body || {};
     const allowedKeys = new Set([

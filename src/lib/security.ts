@@ -9,13 +9,13 @@ let warnedMissingDevSecret = false;
 
 export function isDownloadSigningSecretConfigured(): boolean {
   const raw = (process.env.DOWNLOAD_SIGNING_SECRET || '').trim();
-  return !isPlaceholderValue(raw) && raw.length >= 16;
+  return !isPlaceholderValue(raw) && Buffer.byteLength(raw, 'utf8') >= 32;
 }
 
 export function validateProductionSigningSecret(): void {
   if (process.env.NODE_ENV === 'production' && !isDownloadSigningSecretConfigured()) {
     throw new Error(
-      'DOWNLOAD_SIGNING_SECRET must be set to a strong non-placeholder value (at least 16 characters) in production.'
+      'DOWNLOAD_SIGNING_SECRET must be a non-placeholder secret of at least 32 bytes in production.'
     );
   }
 }
@@ -28,7 +28,7 @@ function getSigningSecret(): string {
 
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
-      'DOWNLOAD_SIGNING_SECRET is unset or uses a placeholder value in production.'
+      'DOWNLOAD_SIGNING_SECRET is unset, too short, or uses a placeholder value in production.'
     );
   }
 
@@ -165,6 +165,8 @@ export async function recordAuditLog(params: {
   targetType: string;
   targetId?: string | number | null;
   details?: string;
+  reason?: string;
+  result?: 'success' | 'denied' | 'failed';
 }) {
   try {
     await db.insert(auditLogs).values({
@@ -174,6 +176,8 @@ export async function recordAuditLog(params: {
       targetType: params.targetType,
       targetId: params.targetId != null ? String(params.targetId) : null,
       details: params.details || null,
+      reason: params.reason ? params.reason.slice(0, 500) : null,
+      result: params.result || 'success',
     });
   } catch (err) {
     console.error('Failed to write audit log:', err);

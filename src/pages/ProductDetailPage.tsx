@@ -164,7 +164,7 @@ export function ProductDetailPage({ slug }: { slug: string }) {
         setFreeStatus(data.error || 'Unable to process request.');
         return;
       }
-      setFreeDownloadUrl(data.downloadUrl);
+      setFreeDownloadUrl(data.downloadUrl || data.redirectUrl || null);
       setFreeStatus(data.message);
       trackEvent({
         eventType: 'free_resource_download',
@@ -410,9 +410,15 @@ export function ProductDetailPage({ slug }: { slug: string }) {
                   {freeDownloadUrl && (
                     <a
                       href={freeDownloadUrl}
+                      target={freeDownloadUrl.startsWith('https://') ? '_blank' : undefined}
+                      rel={freeDownloadUrl.startsWith('https://') ? 'noopener noreferrer' : undefined}
                       className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-emerald-800 hover:bg-emerald-900 rounded-sm"
                     >
-                      <span>Download {product.name} Now</span>
+                      <span>
+                        {freeDownloadUrl.startsWith('https://')
+                          ? 'Continue to Selar'
+                          : `Download ${product.name} Now`}
+                      </span>
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   )}

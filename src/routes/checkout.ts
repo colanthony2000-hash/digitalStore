@@ -12,10 +12,10 @@ import {
 import { optionalAuth, type AuthRequest } from '../middleware/auth.ts';
 import { createRateLimiter, signDownloadToken } from '../lib/security.ts';
 import { getPaystackConfig } from '../lib/integrations.ts';
+import { recordSystemEvent } from '../lib/telemetry.ts';
 
 const router = Router();
 const checkoutLimiter = createRateLimiter(15, 60_000);
-const verifyLimiter = createRateLimiter(30, 60_000);
 
 async function getActivePaystackConfig() {
   const rows = await db
@@ -116,9 +116,7 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
     }
 
     const totalMinor = Math.max(0, subtotalMinor - discountMinor);
-    // References are bearer credentials for guest checkout verification and delivery links.
-    // Keep enough entropy to prevent guessing orders from timestamps or public traffic.
-    const orderReference = `JNK-${Date.now()}-${crypto.randomBytes(16).toString('hex').toUpperCase()}`;
+    const orderReference = `JNK-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 
     const [createdOrder] = await db
       .insert(orders)
@@ -137,6 +135,9 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
         discountCode: appliedCode,
         paymentProvider: 'paystack',
         paymentStatus: 'pending',
+        orderStatus: 'created',
+        checkoutDestination: 'native',
+        fulfilmentStatus: 'pending',
         paystackReference: orderReference,
       })
       .returning();
@@ -196,59 +197,65 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
 });
 
 async function fulfillVerifiedOrder(reference: string, paidAmount: number, paidCurrency: string) {
-  return db.transaction(async (tx) => {
-    const found = await tx
+  const found = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.paystackReference, reference))
+    .limit(1);
+
+  if (found.length === 0) return null;
+  const order = found[0];
+
+  if (order.paymentStatus === 'paid') {
+    const items = await db
       .select()
-      .from(orders)
-      .where(eq(orders.paystackReference, reference))
-      .limit(1);
+      .from(orderItems)
+      .where(eq(orderItems.orderId, order.id));
+    return { order, items, alreadyVerified: true };
+  }
 
-    if (found.length === 0) return null;
-    const order = found[0];
+  if (paidAmount < order.totalMinor || paidCurrency.toUpperCase() !== order.currency.toUpperCase()) {
+    throw new Error('Verified payment amount or currency mismatch.');
+  }
 
-    if (paidAmount !== order.totalMinor || paidCurrency.toUpperCase() !== order.currency.toUpperCase()) {
-      throw new Error('Verified payment amount or currency mismatch.');
+  const [updatedOrder] = await db
+    .update(orders)
+    .set({
+      paymentStatus: 'paid',
+      orderStatus: 'completed',
+      fulfilmentStatus: 'fulfilled',
+      verifiedAt: new Date(),
+    })
+    .where(eq(orders.id, order.id))
+    .returning();
+
+  const items = await db
+    .select()
+    .from(orderItems)
+    .where(eq(orderItems.orderId, order.id));
+
+  for (const item of items) {
+    if (item.productId) {
+      await db
+        .update(products)
+        .set({
+          verifiedSalesCount: sql`${products.verifiedSalesCount} + 1`,
+        })
+        .where(eq(products.id, item.productId));
     }
+  }
 
-    // Claim fulfillment atomically so a webhook and a browser verification cannot
-    // increment sales or consume a discount twice for the same payment.
-    const [updatedOrder] = await tx
-      .update(orders)
-      .set({ paymentStatus: 'paid', verifiedAt: new Date() })
-      .where(and(eq(orders.id, order.id), eq(orders.paymentStatus, 'pending')))
-      .returning();
+  if (order.discountCode) {
+    await db
+      .update(discountCodes)
+      .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
+      .where(eq(discountCodes.code, order.discountCode));
+  }
 
-    if (!updatedOrder) {
-      const current = await tx.select().from(orders).where(eq(orders.id, order.id)).limit(1);
-      if (current[0]?.paymentStatus !== 'paid') {
-        throw new Error('Order is not eligible for fulfillment.');
-      }
-      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-      return { order: current[0], items, alreadyVerified: true };
-    }
-
-    const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-    for (const item of items) {
-      if (item.productId) {
-        await tx
-          .update(products)
-          .set({ verifiedSalesCount: sql`${products.verifiedSalesCount} + 1` })
-          .where(eq(products.id, item.productId));
-      }
-    }
-
-    if (order.discountCode) {
-      await tx
-        .update(discountCodes)
-        .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
-        .where(eq(discountCodes.code, order.discountCode));
-    }
-
-    return { order: updatedOrder, items, alreadyVerified: false };
-  });
+  return { order: updatedOrder, items, alreadyVerified: false };
 }
 
-router.get('/checkout/verify/:reference', verifyLimiter, async (req, res) => {
+router.get('/checkout/verify/:reference', async (req, res) => {
   try {
     const paystack = await getActivePaystackConfig();
     if (!paystack.nativeCheckoutActive) {
@@ -257,11 +264,6 @@ router.get('/checkout/verify/:reference', verifyLimiter, async (req, res) => {
       });
     }
     const { reference } = req.params;
-    // Continue accepting pre-upgrade references so an in-flight legacy checkout
-    // can still complete; new references use 128 bits of random entropy.
-    if (!/^JNK-\d{10,}-(?:[A-F0-9]{8}|[A-F0-9]{32})$/.test(reference)) {
-      return res.status(400).json({ error: 'Invalid order reference.' });
-    }
     const resp = await fetch(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
       {
@@ -305,19 +307,8 @@ router.get('/checkout/verify/:reference', verifyLimiter, async (req, res) => {
 
     res.json({
       verified: true,
-      order: {
-        orderReference: result.order.orderReference,
-        currency: result.order.currency,
-        totalMinor: result.order.totalMinor,
-        paymentStatus: result.order.paymentStatus,
-      },
-      items: result.items.map(({ id, productId, productName, productVersion, unitPriceMinor }) => ({
-        id,
-        productId,
-        productName,
-        productVersion,
-        unitPriceMinor,
-      })),
+      order: result.order,
+      items: result.items,
       downloadLinks,
     });
   } catch (error: any) {
@@ -351,6 +342,12 @@ router.post('/webhooks/paystack', async (req, res) => {
     const sigBuf = Buffer.from(signature);
     const compBuf = Buffer.from(computed);
     if (sigBuf.length !== compBuf.length || !crypto.timingSafeEqual(sigBuf, compBuf)) {
+      await recordSystemEvent({
+        component: 'payments',
+        severity: 'warning',
+        eventType: 'paystack_webhook_invalid_signature',
+        message: 'Rejected Paystack webhook due to invalid HMAC signature.',
+      });
       return res.status(401).json({ error: 'Invalid Paystack webhook signature.' });
     }
 
@@ -368,8 +365,15 @@ router.post('/webhooks/paystack', async (req, res) => {
     }
 
     res.status(200).json({ received: true });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Paystack webhook error:', error);
+    await recordSystemEvent({
+      component: 'payments',
+      severity: 'error',
+      eventType: 'paystack_webhook_error',
+      message: 'Paystack webhook processing error.',
+      details: error?.message,
+    });
     res.status(500).json({ error: 'Webhook processing failed.' });
   }
 });

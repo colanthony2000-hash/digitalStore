@@ -1,3 +1,6 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import { and, asc, desc, eq, ilike, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
@@ -12,7 +15,9 @@ import {
   newsletterSubscribers,
   products,
   storeSettings,
+  supportCases,
   supportEnquiries,
+  users,
 } from '../db/schema.ts';
 import { ensureSeeded } from '../db/seed.ts';
 import { optionalAuth, type AuthRequest } from '../middleware/auth.ts';
@@ -22,9 +27,13 @@ import {
   getPaystackConfig,
   getPinterestConfig,
 } from '../lib/integrations.ts';
+import { sendTransactionalEmail } from '../lib/email.ts';
+import { recordAccountEvent } from '../lib/telemetry.ts';
 
 const router = Router();
 const publicWriteLimiter = createRateLimiter(30, 60_000);
+const authEventLimiter = createRateLimiter(20, 60_000);
+const PROTECTED_STORAGE_DIR = path.resolve(process.cwd(), 'storage', 'protected_products');
 
 export function sanitizeProductForPublic(p: typeof products.$inferSelect) {
   const { protectedFilePath, ...safe } = p;
@@ -129,7 +138,11 @@ router.get('/storefront', async (_req, res) => {
         freePromoSubtext:
           settings.free_promo_subtext ||
           'Receive new digital edition announcements, complimentary starter guides, and seasonal planning kits directly from Jeneconk Digital Store.',
-        supportEmail: settings.support_email || 'support@jeneconk.com',
+        supportEmail:
+          settings.support_email && settings.support_email !== 'support@jeneconk.com'
+            ? settings.support_email
+            : 'info@jeneconk.com',
+        businessEmail: settings.business_email || 'business@jeneconk.com',
         whatsappNumber: settings.whatsapp_number || '',
         pinterestTagId: pinterest.tagId,
         pinterestTagConfigured: pinterest.configured,
@@ -368,6 +381,7 @@ router.post('/newsletter/subscribe', publicWriteLimiter, async (req, res) => {
       });
 
     let downloadUrl: string | null = null;
+    let redirectUrl: string | null = null;
     if (typeof freeResourceSlug === 'string' && freeResourceSlug.trim()) {
       const freeProd = await db
         .select()
@@ -382,21 +396,50 @@ router.post('/newsletter/subscribe', publicWriteLimiter, async (req, res) => {
         .limit(1);
 
       if (freeProd.length > 0) {
-        const token = signDownloadToken({
-          productId: freeProd[0].id,
-          orderItemId: null,
-          userId: null,
-          email: normalizedEmail,
-        });
-        downloadUrl = `/api/downloads/${token}`;
+        const filePath = freeProd[0].protectedFilePath
+          ? path.resolve(PROTECTED_STORAGE_DIR, path.basename(freeProd[0].protectedFilePath))
+          : null;
+        let hasFile = false;
+        if (filePath && filePath.startsWith(PROTECTED_STORAGE_DIR + path.sep)) {
+          try {
+            hasFile = fs.statSync(filePath).isFile();
+          } catch {
+            hasFile = false;
+          }
+        }
+
+        if (hasFile) {
+          const token = signDownloadToken({
+            productId: freeProd[0].id,
+            orderItemId: null,
+            userId: null,
+            email: normalizedEmail,
+          });
+          downloadUrl = `/api/downloads/${token}`;
+        } else if (freeProd[0].marketplaceUrl) {
+          try {
+            const fallback = new URL(freeProd[0].marketplaceUrl);
+            if (
+              fallback.protocol === 'https:' &&
+              (fallback.hostname === 'selar.com' || fallback.hostname.endsWith('.selar.com'))
+            ) {
+              redirectUrl = fallback.toString();
+            }
+          } catch {
+            // Ignore malformed marketplace links; never return them as redirects.
+          }
+        }
       }
     }
 
     res.json({
       subscribed: true,
       downloadUrl,
+      redirectUrl,
       message: downloadUrl
         ? 'Subscribed. Your free resource download link is ready below.'
+        : redirectUrl
+        ? 'Subscribed. Continue to Selar to claim your free resource.'
         : 'Thank you for subscribing to Jeneconk Digital Store updates.',
     });
   } catch (error) {
@@ -405,9 +448,48 @@ router.post('/newsletter/subscribe', publicWriteLimiter, async (req, res) => {
   }
 });
 
+router.post('/auth/event', authEventLimiter, optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    const { eventType, details, termsAccepted } = req.body || {};
+    const allowed = new Set([
+      'registered',
+      'login_password',
+      'login_google',
+      'login_failed',
+      'email_verified',
+      'password_reset_requested',
+    ]);
+    if (typeof eventType !== 'string' || !allowed.has(eventType)) {
+      return res.status(400).json({ error: 'Invalid authentication event type.' });
+    }
+
+    if (req.dbUser && termsAccepted === true && !req.dbUser.termsAcceptedAt) {
+      await db
+        .update(users)
+        .set({ termsAcceptedAt: new Date(), updatedAt: new Date() })
+        .where(eq(users.id, req.dbUser.id));
+    }
+
+    const ipAddress = (req.ip || req.socket.remoteAddress || '').slice(0, 64);
+    await recordAccountEvent({
+      userId: req.dbUser?.id ?? null,
+      email: req.dbUser?.email ?? null,
+      eventType,
+      details: typeof details === 'string' ? details.slice(0, 240) : null,
+      ipAddress,
+    });
+
+    res.json({ recorded: true });
+  } catch (error) {
+    console.error('Error recording auth event:', error);
+    res.status(500).json({ error: 'Unable to record auth event.' });
+  }
+});
+
 router.post('/support/enquiry', publicWriteLimiter, optionalAuth, async (req: AuthRequest, res) => {
   try {
-    const { name, email, subject, productSlug, message } = req.body || {};
+    const { name, email, subject, productSlug, message, category, transactionReference } =
+      req.body || {};
 
     if (
       typeof name !== 'string' ||
@@ -424,25 +506,91 @@ router.post('/support/enquiry', publicWriteLimiter, optionalAuth, async (req: Au
       });
     }
 
+    const cleanEmail = email.trim().toLowerCase().slice(0, 160);
+    const cleanName = name.trim().slice(0, 120);
+    const cleanSubject = subject.trim().slice(0, 180);
+    const cleanMessage = message.trim().slice(0, 4000);
+    const cleanProd =
+      typeof productSlug === 'string' && productSlug.trim()
+        ? productSlug.trim().slice(0, 120)
+        : null;
+
     const inserted = await db
       .insert(supportEnquiries)
       .values({
         userId: req.dbUser?.id ?? null,
-        name: name.trim().slice(0, 120),
-        email: email.trim().toLowerCase().slice(0, 160),
-        subject: subject.trim().slice(0, 180),
-        productSlug:
-          typeof productSlug === 'string' && productSlug.trim()
-            ? productSlug.trim().slice(0, 120)
-            : null,
-        message: message.trim().slice(0, 4000),
+        name: cleanName,
+        email: cleanEmail,
+        subject: cleanSubject,
+        productSlug: cleanProd,
+        message: cleanMessage,
       })
       .returning();
+
+    const caseReference = `JNK-SUP-${Date.now().toString(36).toUpperCase()}-${crypto
+      .randomBytes(2)
+      .toString('hex')
+      .toUpperCase()}`;
+
+    await db.insert(supportCases).values({
+      caseReference,
+      userId: req.dbUser?.id ?? null,
+      customerName: cleanName,
+      customerEmail: cleanEmail,
+      category:
+        typeof category === 'string' && category.trim()
+          ? category.trim().slice(0, 60)
+          : 'general_enquiry',
+      subject: cleanSubject,
+      description: cleanMessage,
+      relatedProductSlug: cleanProd,
+      transactionReference:
+        typeof transactionReference === 'string' && transactionReference.trim()
+          ? transactionReference.trim().slice(0, 120)
+          : null,
+      status: 'open',
+      priority: 'normal',
+      resolutionHistory: [
+        {
+          timestamp: new Date().toISOString(),
+          actorEmail: cleanEmail,
+          action: 'CASE_CREATED',
+          note: 'Submitted via Store Contact & Support form.',
+        },
+      ],
+    });
+
+    if (req.dbUser) {
+      await recordAccountEvent({
+        userId: req.dbUser.id,
+        email: req.dbUser.email,
+        eventType: 'support_case_opened',
+        details: `Case ${caseReference}: ${cleanSubject}`,
+      });
+    }
+
+    // Attempt optional customer/support email notification cleanly
+    const settings = await getSettingsMap();
+    const supportInbox =
+      settings.support_email && settings.support_email !== 'support@jeneconk.com'
+        ? settings.support_email
+        : 'info@jeneconk.com';
+
+    await sendTransactionalEmail({
+      to: supportInbox,
+      replyTo: cleanEmail,
+      subject: `[${caseReference}] New Support Request: ${cleanSubject}`,
+      text: `Case Reference: ${caseReference}\nFrom: ${cleanName} (${cleanEmail})\nProduct: ${
+        cleanProd || 'General'
+      }\n\n${cleanMessage}`,
+      category: 'support_notification',
+    });
 
     res.status(201).json({
       submitted: true,
       enquiryId: inserted[0].id,
-      message: 'Your support request has been received by Jeneconk Customer Assistance.',
+      caseReference,
+      message: `Your support request (${caseReference}) has been received by Jeneconk Customer Assistance.`,
     });
   } catch (error) {
     console.error('Error creating support enquiry:', error);
