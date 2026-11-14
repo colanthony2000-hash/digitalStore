@@ -95,7 +95,13 @@ export function verifyDownloadToken(token: string): DownloadTokenPayload | null 
     const payload = JSON.parse(
       Buffer.from(encoded, 'base64url').toString('utf8')
     ) as DownloadTokenPayload;
-    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+    if (
+      !Number.isSafeInteger(payload.productId) || payload.productId <= 0 ||
+      !(payload.orderItemId === null || (Number.isSafeInteger(payload.orderItemId) && payload.orderItemId > 0)) ||
+      !(payload.userId === null || (Number.isSafeInteger(payload.userId) && payload.userId > 0)) ||
+      !(payload.email === null || typeof payload.email === 'string') ||
+      !Number.isSafeInteger(payload.exp) || payload.exp <= Math.floor(Date.now() / 1000)
+    ) {
       return null;
     }
     return payload;

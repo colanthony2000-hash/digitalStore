@@ -193,6 +193,17 @@ router.get('/downloads/:token', async (req, res) => {
       if (itemRows.length === 0) {
         return res.status(403).json({ error: 'Order item not found.' });
       }
+      if (itemRows[0].productId !== payload.productId) {
+        return res.status(403).json({ error: 'Download link does not match the purchased product.' });
+      }
+      const orderRows = await db
+        .select({ paymentStatus: orders.paymentStatus })
+        .from(orders)
+        .where(eq(orders.id, itemRows[0].orderId))
+        .limit(1);
+      if (orderRows[0]?.paymentStatus !== 'paid') {
+        return res.status(403).json({ error: 'Payment is not eligible for download.' });
+      }
       if (itemRows[0].downloadCount >= itemRows[0].maxDownloads) {
         return res.status(403).json({ error: 'Download limit reached.' });
       }

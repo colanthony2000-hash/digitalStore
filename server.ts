@@ -139,9 +139,11 @@ if (!isProd) {
   });
   app.use(vite.middlewares);
 } else {
-  app.use(express.static(distDir));
+  const staticDir = process.env.VERCEL === '1' ? path.resolve(process.cwd(), 'public') : distDir;
+  const indexFile = path.join(staticDir, 'index.html');
+  app.use(express.static(staticDir));
   app.get('/{*splat}', (_req, res) => {
-    res.sendFile(path.join(distDir, 'index.html'));
+    res.sendFile(indexFile);
   });
 }
 

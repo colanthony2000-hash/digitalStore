@@ -4,6 +4,7 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const isVercelBuild = process.env.VERCEL === '1';
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -18,5 +19,14 @@ export default defineConfig(() => {
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
+    build: isVercelBuild
+      ? {
+          // Vercel's Express runtime serves static files from /public via its CDN.
+          // Preserve checked-in product images while writing the Vite bundle here.
+          outDir: 'public',
+          emptyOutDir: false,
+          copyPublicDir: false,
+        }
+      : undefined,
   };
 });

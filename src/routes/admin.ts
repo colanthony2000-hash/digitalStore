@@ -759,13 +759,31 @@ router.patch('/collections/:id', async (req: AuthRequest, res) => {
 router.post('/discounts', async (req: AuthRequest, res) => {
   try {
     const { code, discountType, value, maxUses } = req.body || {};
+    const cleanCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
+    const cleanType = discountType || 'percent';
+    const numericValue = Number(value);
+    const numericMaxUses = maxUses === '' || maxUses === null || maxUses === undefined
+      ? null
+      : Number(maxUses);
+    if (!/^[A-Z0-9_-]{3,32}$/.test(cleanCode)) {
+      return res.status(400).json({ error: 'Discount code must be 3–32 letters, numbers, hyphens, or underscores.' });
+    }
+    if (!['percent', 'fixed_ngn', 'fixed_usd'].includes(cleanType)) {
+      return res.status(400).json({ error: 'Unsupported discount type.' });
+    }
+    if (!Number.isSafeInteger(numericValue) || numericValue <= 0 || (cleanType === 'percent' && numericValue > 100)) {
+      return res.status(400).json({ error: 'Discount value must be a positive integer; percentage discounts cannot exceed 100.' });
+    }
+    if (numericMaxUses !== null && (!Number.isSafeInteger(numericMaxUses) || numericMaxUses <= 0)) {
+      return res.status(400).json({ error: 'Maximum uses must be a positive integer.' });
+    }
     const [created] = await db
       .insert(discountCodes)
       .values({
-        code: String(code).trim().toUpperCase(),
-        discountType: discountType || 'percent',
-        value: Number(value),
-        maxUses: maxUses ? Number(maxUses) : null,
+        code: cleanCode,
+        discountType: cleanType,
+        value: numericValue,
+        maxUses: numericMaxUses,
         isActive: true,
       })
       .returning();
