@@ -29,6 +29,7 @@ export function Navbar() {
     cart,
     setCartOpen,
     profile,
+    isConsoleAuthorized,
     firebaseUser,
     bundles,
     products,
@@ -205,13 +206,13 @@ export function Navbar() {
               </button>
             )}
 
-            {profile?.role === 'admin' && (
+            {isConsoleAuthorized && (
               <button
                 type="button"
                 onClick={() => navigate('/admin')}
                 className="hidden sm:inline-flex items-center px-3 py-2 text-xs font-medium text-[#0A264A] border border-[#D5CCB9] bg-white hover:bg-[#F3EEE4] rounded-sm transition-colors whitespace-nowrap shrink-0 min-h-[40px]"
               >
-                Admin
+                Admin Console
               </button>
             )}
 
@@ -309,7 +310,7 @@ export function Navbar() {
               >
                 {firebaseUser ? 'Customer Account' : 'Sign In'}
               </button>
-              {profile?.role === 'admin' && (
+              {isConsoleAuthorized && (
                 <button
                   type="button"
                   onClick={() => {
@@ -318,7 +319,7 @@ export function Navbar() {
                   }}
                   className="px-4 py-2.5 text-sm font-semibold text-[#0A264A] bg-white border border-[#D5CCB9] rounded-sm min-h-[44px]"
                 >
-                  Admin
+                  Admin Console
                 </button>
               )}
             </div>

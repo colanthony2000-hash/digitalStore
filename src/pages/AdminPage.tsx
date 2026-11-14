@@ -1,51 +1,95 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   BarChart3,
   BookOpen,
   Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
   FolderTree,
   Globe,
   Layers,
+  Mail,
   Package,
   Plus,
   Settings,
   ShieldAlert,
   Tag,
+  Ticket,
   Trash2,
   Upload,
+  UserCog,
   Users,
 } from 'lucide-react';
 import { EcosystemIcon } from '../components/EcosystemIcon';
 import { SeoHead } from '../components/SeoHead';
+import {
+  AdminCustomersTab,
+  type AdminCustomerSummary,
+} from '../components/admin/AdminCustomersTab';
+import {
+  AdminEmailTab,
+  AdminInfraTab,
+  AdminReportsTab,
+} from '../components/admin/AdminInfraEmailReportsTabs';
+import { AdminOrdersTab } from '../components/admin/AdminOrdersTab';
+import { AdminSupportTab } from '../components/admin/AdminSupportTab';
+import { ReauthModal } from '../components/admin/ReauthModal';
 import { useStore } from '../context/StoreContext';
 import { formatMinorPrice } from '../lib/format';
+import { ROLE_LABELS, type AdminPermission } from '../lib/rbac';
 import type {
+  AccountEventRecord,
   Bundle,
   Category,
   EcosystemPlatform,
+  EmailLogRecord,
+  InfraComponentReport,
   Product,
   StoreCollection,
+  SupportCaseRecord,
+  SystemEventRecord,
 } from '../types/store';
 
 type AdminTab =
   | 'overview'
+  | 'customers'
+  | 'support'
+  | 'orders'
   | 'products'
   | 'categories'
   | 'bundles'
   | 'ecosystem'
-  | 'orders'
   | 'marketing'
+  | 'infrastructure'
+  | 'email'
+  | 'reports'
   | 'settings'
   | 'guides';
 
 interface AdminOverviewData {
+  callerRole: string;
+  callerPermissions: AdminPermission[];
+  availableRoles: { value: string; label: string }[];
   analytics: {
     productViews: number;
     outboundSelarClicks: number;
     freeDownloads: number;
+    protectedDownloadsCount?: number;
     confirmedNativeOrders: number;
+    pendingOrdersCount?: number;
+    failedOrdersCount?: number;
+    refundedOrdersCount?: number;
+    totalOrdersCount?: number;
     confirmedRevenueNgnKobo: number;
     confirmedRevenueUsdCents: number;
+    totalCustomers?: number;
+    totalAccounts?: number;
+    newRegistrations7d?: number;
+    publishedProducts?: number;
+    openSupportCasesCount?: number;
+    unresolvedIncidentsCount?: number;
     trafficSources: { source: string; count: number }[];
     geoDistribution: { country: string; count: number }[];
     perProduct: { slug: string; views: number; selarClicks: number }[];
@@ -56,9 +100,10 @@ interface AdminOverviewData {
   collections: StoreCollection[];
   ecosystemPlatforms: EcosystemPlatform[];
   orders: any[];
-  customers: any[];
+  customers: AdminCustomerSummary[];
   subscribers: any[];
   enquiries: any[];
+  supportCases: SupportCaseRecord[];
   discounts: any[];
   settings: Record<string, string>;
   paystackEnvConfigured: boolean;
@@ -80,6 +125,22 @@ interface AdminOverviewData {
       configured: boolean;
     };
   };
+  emailStatus?: {
+    configured: boolean;
+    provider: 'smtp' | 'resend' | 'unconfigured';
+    supportAddress: string;
+    businessAddress: string;
+    fromAddress: string;
+    firebaseAuthEmailActive: boolean;
+    detailMessage: string;
+  };
+  emailLogs?: EmailLogRecord[];
+  infrastructure?: {
+    checkedAt: string;
+    components: InfraComponentReport[];
+    recentEvents: SystemEventRecord[];
+  };
+  recentAccountActivity?: AccountEventRecord[];
   auditLogs: any[];
 }
 
@@ -87,8 +148,11 @@ export function AdminPage() {
   const {
     firebaseUser,
     profile,
+    isConsoleAuthorized,
+    hasAdminPermission,
     authLoading,
     authError,
+    signInWithEmail,
     signInWithGoogle,
     getAuthHeaders,
     refreshStorefront,
@@ -100,6 +164,17 @@ export function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Admin email/password login gate state (when unauthenticated)
+  const [adminLoginEmail, setAdminLoginEmail] = useState('');
+  const [adminLoginPw, setAdminLoginPw] = useState('');
+  const [showAdminPw, setShowAdminPw] = useState(false);
+  const [adminLoginBusy, setAdminLoginBusy] = useState(false);
+
+  // Interactive Reauthentication Modal state
+  const [reauthPendingAction, setReauthPendingAction] = useState<
+    (() => Promise<void>) | null
+  >(null);
 
   // Product editor state
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
@@ -155,7 +230,7 @@ export function AdminPage() {
   const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
 
   const loadAdminData = useCallback(async () => {
-    if (!firebaseUser || profile?.role !== 'admin') return;
+    if (!firebaseUser || !isConsoleAuthorized) return;
     setLoading(true);
     setError(null);
     try {
@@ -173,7 +248,7 @@ export function AdminPage() {
     } finally {
       setLoading(false);
     }
-  }, [firebaseUser, profile, getAuthHeaders]);
+  }, [firebaseUser, isConsoleAuthorized, getAuthHeaders]);
 
   useEffect(() => {
     loadAdminData();
@@ -344,23 +419,30 @@ export function AdminPage() {
   };
 
   const handleDeleteProduct = async (id: number, name: string) => {
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch(`/api/admin/products/${id}`, {
-        method: 'DELETE',
-        headers,
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        showToast(json.error || 'Unable to delete product.');
-        return;
+    const execute = async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`/api/admin/products/${id}`, {
+          method: 'DELETE',
+          headers,
+        });
+        const json = await res.json();
+        if (res.status === 403 && json.code === 'REAUTH_REQUIRED') {
+          setReauthPendingAction(() => execute);
+          return;
+        }
+        if (!res.ok) {
+          showToast(json.error || 'Unable to delete product.');
+          return;
+        }
+        setConfirmDeleteId(null);
+        showToast(`Deleted "${name}".`);
+        await Promise.all([loadAdminData(), refreshStorefront()]);
+      } catch {
+        showToast('Network error while deleting product.');
       }
-      setConfirmDeleteId(null);
-      showToast(`Deleted "${name}".`);
-      await Promise.all([loadAdminData(), refreshStorefront()]);
-    } catch {
-      showToast('Network error while deleting product.');
-    }
+    };
+    await execute();
   };
 
   const handleCoverUpload = async (file: File) => {
@@ -683,29 +765,36 @@ export function AdminPage() {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingSettings) return;
-    setSavingSettings(true);
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...(await getAuthHeaders()),
-      };
-      const res = await fetch('/api/admin/settings', {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify(settingsForm),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        showToast(json.error || 'Unable to update store settings.');
-        return;
+    const execute = async () => {
+      setSavingSettings(true);
+      try {
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        };
+        const res = await fetch('/api/admin/settings', {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(settingsForm),
+        });
+        const json = await res.json();
+        if (res.status === 403 && json.code === 'REAUTH_REQUIRED') {
+          setReauthPendingAction(() => execute);
+          return;
+        }
+        if (!res.ok) {
+          showToast(json.error || 'Unable to update store settings.');
+          return;
+        }
+        showToast('Store settings updated.');
+        await Promise.all([loadAdminData(), refreshStorefront()]);
+      } catch {
+        showToast('Network error while saving settings.');
+      } finally {
+        setSavingSettings(false);
       }
-      showToast('Store settings updated.');
-      await Promise.all([loadAdminData(), refreshStorefront()]);
-    } catch {
-      showToast('Network error while saving settings.');
-    } finally {
-      setSavingSettings(false);
-    }
+    };
+    await execute();
   };
 
   const handleExportOrdersCsv = async () => {
@@ -721,6 +810,106 @@ export function AdminPage() {
     URL.revokeObjectURL(url);
   };
 
+  const tabs = useMemo(() => {
+    const items: {
+      id: AdminTab;
+      label: string;
+      icon: React.ReactNode;
+      visible: boolean;
+    }[] = [
+      {
+        id: 'overview',
+        label: 'Operations Overview',
+        icon: <BarChart3 className="w-4 h-4" />,
+        visible: hasAdminPermission('view_overview'),
+      },
+      {
+        id: 'customers',
+        label: 'Customers',
+        icon: <UserCog className="w-4 h-4" />,
+        visible: hasAdminPermission('view_customers'),
+      },
+      {
+        id: 'support',
+        label: 'Support Cases',
+        icon: <Ticket className="w-4 h-4" />,
+        visible:
+          hasAdminPermission('manage_support_cases') ||
+          hasAdminPermission('view_customers'),
+      },
+      {
+        id: 'orders',
+        label: 'Orders & Txns',
+        icon: <Users className="w-4 h-4" />,
+        visible: hasAdminPermission('view_orders'),
+      },
+      {
+        id: 'products',
+        label: 'Products',
+        icon: <Package className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_catalog'),
+      },
+      {
+        id: 'categories',
+        label: 'Departments',
+        icon: <FolderTree className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_catalog'),
+      },
+      {
+        id: 'bundles',
+        label: 'Bundles',
+        icon: <Layers className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_catalog'),
+      },
+      {
+        id: 'ecosystem',
+        label: 'Ecosystem',
+        icon: <Globe className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_catalog'),
+      },
+      {
+        id: 'marketing',
+        label: 'Promotions',
+        icon: <Tag className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_catalog'),
+      },
+      {
+        id: 'infrastructure',
+        label: 'Infrastructure',
+        icon: <Activity className="w-4 h-4" />,
+        visible: hasAdminPermission('view_infra'),
+      },
+      {
+        id: 'email',
+        label: 'Business Email',
+        icon: <Mail className="w-4 h-4" />,
+        visible:
+          hasAdminPermission('manage_settings') ||
+          hasAdminPermission('view_infra') ||
+          hasAdminPermission('manage_support_cases'),
+      },
+      {
+        id: 'reports',
+        label: 'Reports & CSV',
+        icon: <FileSpreadsheet className="w-4 h-4" />,
+        visible: hasAdminPermission('view_reports'),
+      },
+      {
+        id: 'settings',
+        label: 'Settings & Audit',
+        icon: <Settings className="w-4 h-4" />,
+        visible: hasAdminPermission('manage_settings') || hasAdminPermission('manage_roles'),
+      },
+      {
+        id: 'guides',
+        label: 'Runbooks & Guides',
+        icon: <BookOpen className="w-4 h-4" />,
+        visible: true,
+      },
+    ];
+    return items.filter((i) => i.visible);
+  }, [hasAdminPermission]);
+
   if (authLoading) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-16">
@@ -731,91 +920,163 @@ export function AdminPage() {
 
   if (!firebaseUser) {
     return (
-      <div className="max-w-xl mx-auto px-4 py-20 text-center space-y-4">
-        <ShieldAlert className="w-10 h-10 text-[#0A264A] mx-auto" />
-        <h1 className="font-display text-2xl font-bold text-slate-900">
-          Administrator Sign-In Required
-        </h1>
-        <p className="text-sm text-slate-600">
-          Sign in with your authorised Jeneconk administrator Google account to manage products, Selar links, pricing, orders, and analytics.
-        </p>
-        {authError && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm px-4 py-3 rounded-lg text-left">
-            {authError}
+      <div className="max-w-md mx-auto px-4 py-16 space-y-6">
+        <div className="bg-white border border-[#D5CCB9] rounded-xl p-6 sm:p-8 space-y-5">
+          <div className="text-center space-y-2">
+            <ShieldAlert className="w-9 h-9 text-[#0A264A] mx-auto" />
+            <h1 className="font-display text-2xl font-bold text-slate-900">
+              Operations Console Sign-In
+            </h1>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Sign in with your authorised Jeneconk operations staff account. Public staff sign-up is disabled.
+            </p>
           </div>
-        )}
-        <button
-          type="button"
-          onClick={signInWithGoogle}
-          className="px-6 py-3 text-sm font-semibold text-white bg-[#0A264A] rounded-lg"
-        >
-          Sign In with Google
-        </button>
+          {authError && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs px-4 py-3 rounded-lg">
+              {authError}
+            </div>
+          )}
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setAdminLoginBusy(true);
+              await signInWithEmail({
+                email: adminLoginEmail,
+                password: adminLoginPw,
+                rememberMe: true,
+              });
+              setAdminLoginBusy(false);
+            }}
+            className="space-y-3"
+          >
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Staff Email
+              </label>
+              <input
+                type="email"
+                required
+                value={adminLoginEmail}
+                onChange={(e) => setAdminLoginEmail(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  type={showAdminPw ? 'text' : 'password'}
+                  required
+                  value={adminLoginPw}
+                  onChange={(e) => setAdminLoginPw(e.target.value)}
+                  className="w-full pr-10 px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminPw((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                >
+                  {showAdminPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={adminLoginBusy}
+              className="w-full py-2.5 text-xs font-semibold uppercase tracking-[0.12em] text-white bg-[#0A264A] hover:bg-[#061830] rounded-lg disabled:opacity-60"
+            >
+              {adminLoginBusy ? 'Signing In...' : 'Sign In with Email'}
+            </button>
+          </form>
+          <div className="relative flex items-center">
+            <div className="flex-grow border-t border-slate-200" />
+            <span className="shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400">
+              Or
+            </span>
+            <div className="flex-grow border-t border-slate-200" />
+          </div>
+          <button
+            type="button"
+            onClick={() => signInWithGoogle(true)}
+            className="w-full py-2.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg"
+          >
+            Continue with Google
+          </button>
+        </div>
       </div>
     );
   }
 
-  if (profile && profile.role !== 'admin') {
+  if (profile && !isConsoleAuthorized) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center space-y-4">
         <ShieldAlert className="w-10 h-10 text-rose-600 mx-auto" />
         <h1 className="font-display text-2xl font-bold text-slate-900">
-          Administrator Permission Required
+          Operations Console Permission Required
         </h1>
         <p className="text-sm text-slate-600">
-          Signed in as {firebaseUser.email}, which currently holds a customer role. Only authorised Jeneconk administrators can access this console.
+          Signed in as {firebaseUser.email}, which holds a standard customer role. Only authorised Jeneconk staff can access this operations console.
         </p>
         <button
           type="button"
-          onClick={() => navigate('/')}
+          onClick={() => navigate('/account')}
           className="px-5 py-2.5 text-sm font-semibold text-white bg-[#0A264A] rounded-lg"
         >
-          Return to Storefront
+          Return to Customer Account
         </button>
       </div>
     );
   }
 
-  const tabs: { id: AdminTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'overview', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" /> },
-    { id: 'products', label: 'Products', icon: <Package className="w-4 h-4" /> },
-    { id: 'categories', label: 'Departments', icon: <FolderTree className="w-4 h-4" /> },
-    { id: 'bundles', label: 'Bundles', icon: <Layers className="w-4 h-4" /> },
-    { id: 'ecosystem', label: 'Ecosystem', icon: <Globe className="w-4 h-4" /> },
-    { id: 'orders', label: 'Orders & Users', icon: <Users className="w-4 h-4" /> },
-    { id: 'marketing', label: 'Marketing & Support', icon: <Tag className="w-4 h-4" /> },
-    { id: 'settings', label: 'Settings & Audit', icon: <Settings className="w-4 h-4" /> },
-    { id: 'guides', label: 'Guides & Checklists', icon: <BookOpen className="w-4 h-4" /> },
-  ];
-
   return (
-    <div className="py-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+    <div className="py-8 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
       <SeoHead
-        title="Admin Dashboard | Jeneconk Digital Store"
-        description="Jeneconk Digital Store administration console."
+        title="Operations Centre | Jeneconk Digital Store"
+        description="Jeneconk Digital Store administration and infrastructure operations console."
         path="/admin"
       />
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <ReauthModal
+        open={Boolean(reauthPendingAction)}
+        onClose={() => setReauthPendingAction(null)}
+        onSuccess={async () => {
+          const fn = reauthPendingAction;
+          setReauthPendingAction(null);
+          if (fn) await fn();
+        }}
+      />
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E4DDD0] pb-5">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900">
-            Store Administration
-          </h1>
-          <p className="text-sm text-slate-600 mt-1">
-            Signed in as {firebaseUser.email} · Manage products, Selar links, pricing, and analytics without editing code.
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900">
+              Store Operations &amp; Infrastructure Centre
+            </h1>
+            {profile && (
+              <span className="px-2.5 py-0.5 text-[11px] font-mono bg-[#0A264A] text-white rounded">
+                {ROLE_LABELS[profile.role] || profile.role}
+              </span>
+            )}
+          </div>
+          <p className="text-xs sm:text-sm text-slate-600 mt-1">
+            Signed in as {firebaseUser.email} · Jeneconk Integrated Global Solutions Limited
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setTab('products');
-            openProductEditor();
-          }}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-[#0A264A] hover:bg-[#061830] rounded-lg whitespace-nowrap shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Digital Product</span>
-        </button>
+        {hasAdminPermission('manage_catalog') && (
+          <button
+            type="button"
+            onClick={() => {
+              setTab('products');
+              openProductEditor();
+            }}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-[#0A264A] hover:bg-[#061830] rounded-lg whitespace-nowrap shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Digital Product</span>
+          </button>
+        )}
       </div>
 
       {toast && (
@@ -830,17 +1091,17 @@ export function AdminPage() {
         </div>
       )}
 
-      {/* Navigation Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-[#E4DDD0]">
+      {/* Mobile Horizontal Tabs */}
+      <div className="flex lg:hidden items-center gap-1.5 overflow-x-auto pb-2 border-b border-[#E4DDD0]">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
+            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
               tab === t.id
                 ? 'bg-[#0A264A] text-white'
-                : 'bg-white text-slate-700 border border-[#E4DDD0] hover:bg-slate-50'
+                : 'bg-white text-slate-700 border border-[#E4DDD0]'
             }`}
           >
             {t.icon}
@@ -849,46 +1110,128 @@ export function AdminPage() {
         ))}
       </div>
 
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Desktop Persistent 220px SaaS Sidebar */}
+        <aside className="hidden lg:flex flex-col w-[220px] shrink-0 bg-white border border-[#E4DDD0] rounded-xl p-2 space-y-1 sticky top-24">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-lg text-left transition-colors ${
+                tab === t.id
+                  ? 'bg-[#0A264A] text-white'
+                  : 'text-slate-700 hover:bg-[#FAF8F4]'
+              }`}
+            >
+              {t.icon}
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </aside>
+
+        <div className="flex-1 min-w-0 w-full space-y-8">
       {loading && !data ? (
         <div className="h-64 bg-white border border-[#E4DDD0] rounded-xl animate-pulse" />
       ) : data ? (
         <>
-          {/* TAB 1: ANALYTICS OVERVIEW */}
+          {/* TAB 1: OPERATIONS OVERVIEW (BUSINESS + SYSTEM SUMMARY) */}
           {tab === 'overview' && (
             <div className="space-y-8">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-5">
-                  <p className="text-xs text-slate-500">Product Page Views</p>
-                  <p className="mt-2 font-mono text-2xl font-bold text-slate-900 tabular-nums">
-                    {data.analytics.productViews}
-                  </p>
-                </div>
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-5">
-                  <p className="text-xs text-slate-500">
-                    Outbound Selar Clicks (Unconfirmed)
-                  </p>
-                  <p className="mt-2 font-mono text-2xl font-bold text-[#0A264A] tabular-nums">
-                    {data.analytics.outboundSelarClicks}
-                  </p>
-                </div>
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-5">
-                  <p className="text-xs text-slate-500">
-                    Confirmed Native Orders
-                  </p>
-                  <p className="mt-2 font-mono text-2xl font-bold text-slate-900 tabular-nums">
-                    {data.analytics.confirmedNativeOrders}
-                  </p>
-                </div>
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-5">
-                  <p className="text-xs text-slate-500">
-                    Confirmed Revenue (NGN / USD)
-                  </p>
-                  <p className="mt-2 font-mono text-lg font-bold text-slate-900 tabular-nums">
-                    {formatMinorPrice(data.analytics.confirmedRevenueNgnKobo, 'NGN')} ·{' '}
-                    {formatMinorPrice(data.analytics.confirmedRevenueUsdCents, 'USD')}
-                  </p>
+              <div>
+                <h2 className="font-display text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
+                  Business &amp; Storefront Overview
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white border border-[#E4DDD0] rounded-xl p-4">
+                    <p className="text-xs text-slate-500">Registered Customers</p>
+                    <p className="mt-1 font-mono text-2xl font-bold text-slate-900 tabular-nums">
+                      {data.analytics.totalCustomers ?? data.customers.length}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      +{data.analytics.newRegistrations7d ?? 0} in last 7 days
+                    </p>
+                  </div>
+                  <div className="bg-white border border-[#E4DDD0] rounded-xl p-4">
+                    <p className="text-xs text-slate-500">Published Catalog</p>
+                    <p className="mt-1 font-mono text-2xl font-bold text-slate-900 tabular-nums">
+                      {data.analytics.publishedProducts ?? data.products.length}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Views: {data.analytics.productViews} · Selar clicks: {data.analytics.outboundSelarClicks}
+                    </p>
+                  </div>
+                  <div className="bg-white border border-[#E4DDD0] rounded-xl p-4">
+                    <p className="text-xs text-slate-500">Native Orders (Paid / Pending / Failed)</p>
+                    <p className="mt-1 font-mono text-2xl font-bold text-[#0A264A] tabular-nums">
+                      {data.analytics.confirmedNativeOrders} / {data.analytics.pendingOrdersCount ?? 0} /{' '}
+                      {data.analytics.failedOrdersCount ?? 0}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Free unlocks: {data.analytics.freeDownloads}
+                    </p>
+                  </div>
+                  <div className="bg-white border border-[#E4DDD0] rounded-xl p-4">
+                    <p className="text-xs text-slate-500">Confirmed Native Revenue</p>
+                    <p className="mt-1 font-mono text-lg font-bold text-slate-900 tabular-nums">
+                      {formatMinorPrice(data.analytics.confirmedRevenueNgnKobo, 'NGN')} ·{' '}
+                      {formatMinorPrice(data.analytics.confirmedRevenueUsdCents, 'USD')}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Selar revenue settles on Selar dashboard
+                    </p>
+                  </div>
                 </div>
               </div>
+
+              {data.infrastructure && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-display text-sm font-bold uppercase tracking-wider text-slate-500">
+                      Real System &amp; Integration Status
+                    </h2>
+                    {hasAdminPermission('view_infra') && (
+                      <button
+                        type="button"
+                        onClick={() => setTab('infrastructure')}
+                        className="text-xs font-semibold text-[#0A264A] hover:underline"
+                      >
+                        Open Infrastructure Console →
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {data.infrastructure.components.map((c) => (
+                      <div
+                        key={c.id}
+                        className="bg-white border border-[#E4DDD0] rounded-xl p-4 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-900 truncate">
+                            {c.name}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+                              c.status === 'operational'
+                                ? 'bg-emerald-50 text-emerald-800'
+                                : c.status === 'degraded'
+                                ? 'bg-rose-50 text-rose-800'
+                                : c.status === 'not_configured'
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'bg-amber-50 text-amber-800'
+                            }`}
+                          >
+                            {c.statusLabel}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 line-clamp-2">
+                          {c.metrics[0]?.label}: <strong className="text-slate-700">{c.metrics[0]?.value}</strong>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-white border border-[#E4DDD0] rounded-xl p-6">
@@ -958,6 +1301,31 @@ export function AdminPage() {
                 </div>
               </div>
             </div>
+          )}
+
+          {tab === 'customers' && (
+            <AdminCustomersTab
+              customers={data.customers}
+              availableRoles={data.availableRoles || []}
+              hasPermission={hasAdminPermission}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+              onRefresh={loadAdminData}
+              onRequireReauth={(fn) => setReauthPendingAction(() => fn)}
+            />
+          )}
+
+          {tab === 'support' && (
+            <AdminSupportTab
+              supportCases={data.supportCases || []}
+              enquiries={data.enquiries || []}
+              subscribers={data.subscribers || []}
+              products={data.products || []}
+              hasPermission={hasAdminPermission}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+              onRefresh={loadAdminData}
+            />
           )}
 
           {/* TAB 2: PRODUCT MANAGEMENT */}
@@ -2690,264 +3058,150 @@ export function AdminPage() {
             </div>
           )}
 
-          {/* TAB 5: ORDERS & CUSTOMERS */}
+          {/* TAB 5: ORDERS & TRANSACTIONS */}
           {tab === 'orders' && (
-            <div className="space-y-8">
-              <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-display text-lg font-bold text-slate-900">
-                    Native Store Orders
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={handleExportOrdersCsv}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 rounded-lg"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export CSV</span>
-                  </button>
-                </div>
-                {data.orders.length === 0 ? (
-                  <p className="text-sm text-slate-600">
-                    No native Paystack orders recorded yet. External Selar transactions are managed inside your Selar seller dashboard.
-                  </p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs text-slate-500 border-b border-[#E4DDD0]">
-                        <th className="pb-2">Reference</th>
-                        <th className="pb-2">Customer</th>
-                        <th className="pb-2">Amount</th>
-                        <th className="pb-2">Status</th>
-                        <th className="pb-2 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {data.orders.map((o) => (
-                        <tr key={o.id}>
-                          <td className="py-2.5 font-mono text-xs">{o.orderReference}</td>
-                          <td className="py-2.5 text-xs">{o.customerEmail}</td>
-                          <td className="py-2.5 font-mono text-xs tabular-nums">
-                            {formatMinorPrice(o.totalMinor, o.currency)}
-                          </td>
-                          <td className="py-2.5 text-xs uppercase font-medium">
-                            {o.paymentStatus}
-                          </td>
-                          <td className="py-2.5 text-right">
-                            {o.paymentStatus === 'paid' && (
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  const headers = await getAuthHeaders();
-                                  await fetch(`/api/admin/orders/${o.id}/refund`, {
-                                    method: 'POST',
-                                    headers,
-                                  });
-                                  loadAdminData();
-                                }}
-                                className="text-xs text-rose-700 hover:underline"
-                              >
-                                Record Refund
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+            <AdminOrdersTab
+              orders={data.orders || []}
+              nativeCheckoutActive={Boolean(
+                data.integrationStatus?.paystack.nativeCheckoutActive
+              )}
+              hasPermission={hasAdminPermission}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+              onRefresh={loadAdminData}
+              onExportCsv={handleExportOrdersCsv}
+              onRequireReauth={(fn) => setReauthPendingAction(() => fn)}
+            />
+          )}
 
-              <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-4">
-                <h2 className="font-display text-lg font-bold text-slate-900">
-                  Registered Accounts ({data.customers.length})
+          {/* TAB 6: PROMOTIONS & DISCOUNT CODES */}
+          {tab === 'marketing' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <form
+                onSubmit={handleCreateDiscount}
+                className="lg:col-span-5 bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-4 h-fit"
+              >
+                <h2 className="font-display text-base font-bold text-slate-900">
+                  Create Discount Code
                 </h2>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-slate-500 border-b border-[#E4DDD0]">
-                      <th className="pb-2">Email</th>
-                      <th className="pb-2">Name</th>
-                      <th className="pb-2">Role</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.customers.map((c) => (
-                      <tr key={c.id}>
-                        <td className="py-2.5 text-xs">{c.email}</td>
-                        <td className="py-2.5 text-xs">{c.fullName || '—'}</td>
-                        <td className="py-2.5 text-xs font-mono">{c.role}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <input
+                  type="text"
+                  required
+                  placeholder="CODE (e.g. LAUNCH20)"
+                  value={newDiscount.code}
+                  onChange={(e) =>
+                    setNewDiscount({ ...newDiscount, code: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm font-mono uppercase border border-slate-300 rounded-lg"
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <select
+                    value={newDiscount.discountType}
+                    onChange={(e) =>
+                      setNewDiscount({ ...newDiscount, discountType: e.target.value })
+                    }
+                    className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  >
+                    <option value="percent">Percentage (%)</option>
+                    <option value="fixed_ngn">Fixed NGN (₦)</option>
+                    <option value="fixed_usd">Fixed USD ($)</option>
+                  </select>
+                  <input
+                    type="number"
+                    required
+                    value={newDiscount.value}
+                    onChange={(e) =>
+                      setNewDiscount({ ...newDiscount, value: e.target.value })
+                    }
+                    className="px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Max Uses (optional)"
+                  value={newDiscount.maxUses}
+                  onChange={(e) =>
+                    setNewDiscount({ ...newDiscount, maxUses: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                />
+                <button
+                  type="submit"
+                  className="w-full py-2.5 text-xs font-semibold text-white bg-[#0A264A] rounded-lg"
+                >
+                  Save Discount Code
+                </button>
+              </form>
+
+              <div className="lg:col-span-7 bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-3">
+                <h3 className="font-display text-base font-bold text-slate-900">
+                  Active &amp; Past Codes ({data.discounts.length})
+                </h3>
+                {data.discounts.length === 0 ? (
+                  <p className="text-xs text-slate-500">No discount codes created yet.</p>
+                ) : (
+                  data.discounts.map((d) => (
+                    <div
+                      key={d.id}
+                      className="flex items-center justify-between gap-3 text-xs border-b border-slate-100 pb-2"
+                    >
+                      <div>
+                        <span className="font-mono font-semibold text-slate-900">
+                          {d.code}
+                        </span>
+                        <span className="ml-2 text-slate-600">
+                          {d.value} ({d.discountType}) · Used {d.usedCount}
+                          {d.maxUses ? `/${d.maxUses}` : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleDiscount(d.id, d.isActive)}
+                        className={`px-2.5 py-1 rounded text-[11px] font-semibold ${
+                          d.isActive
+                            ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {d.isActive ? 'Active (Pause)' : 'Paused (Activate)'}
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
 
-          {/* TAB 6: MARKETING & SUPPORT */}
-          {tab === 'marketing' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <div className="lg:col-span-5 space-y-6">
-                <form
-                  onSubmit={handleCreateDiscount}
-                  className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-4"
-                >
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Create Discount Code
-                  </h2>
-                  <input
-                    type="text"
-                    required
-                    placeholder="CODE (e.g. LAUNCH20)"
-                    value={newDiscount.code}
-                    onChange={(e) =>
-                      setNewDiscount({ ...newDiscount, code: e.target.value })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono uppercase border border-slate-300 rounded-lg"
-                  />
-                  <div className="grid grid-cols-2 gap-3">
-                    <select
-                      value={newDiscount.discountType}
-                      onChange={(e) =>
-                        setNewDiscount({ ...newDiscount, discountType: e.target.value })
-                      }
-                      className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                    >
-                      <option value="percent">Percentage (%)</option>
-                      <option value="fixed_ngn">Fixed NGN (₦)</option>
-                      <option value="fixed_usd">Fixed USD ($)</option>
-                    </select>
-                    <input
-                      type="number"
-                      required
-                      value={newDiscount.value}
-                      onChange={(e) =>
-                        setNewDiscount({ ...newDiscount, value: e.target.value })
-                      }
-                      className="px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Max Uses (optional)"
-                    value={newDiscount.maxUses}
-                    onChange={(e) =>
-                      setNewDiscount({ ...newDiscount, maxUses: e.target.value })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
-                  />
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 text-xs font-semibold text-white bg-[#0A264A] rounded-lg"
-                  >
-                    Save Discount Code
-                  </button>
-                </form>
+          {tab === 'infrastructure' && data.infrastructure && (
+            <AdminInfraTab
+              infrastructure={data.infrastructure}
+              hasPermission={hasAdminPermission}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+              onRefresh={loadAdminData}
+            />
+          )}
 
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-3">
-                  <h3 className="font-display text-base font-bold text-slate-900">
-                    Active &amp; Past Codes ({data.discounts.length})
-                  </h3>
-                  {data.discounts.length === 0 ? (
-                    <p className="text-xs text-slate-500">No discount codes created yet.</p>
-                  ) : (
-                    data.discounts.map((d) => (
-                      <div
-                        key={d.id}
-                        className="flex items-center justify-between gap-3 text-xs border-b border-slate-100 pb-2"
-                      >
-                        <div>
-                          <span className="font-mono font-semibold text-slate-900">
-                            {d.code}
-                          </span>
-                          <span className="ml-2 text-slate-600">
-                            {d.value} ({d.discountType}) · Used {d.usedCount}
-                            {d.maxUses ? `/${d.maxUses}` : ''}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleDiscount(d.id, d.isActive)}
-                          className={`px-2.5 py-1 rounded text-[11px] font-semibold ${
-                            d.isActive
-                              ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {d.isActive ? 'Active (Pause)' : 'Paused (Activate)'}
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+          {tab === 'email' && data.emailStatus && (
+            <AdminEmailTab
+              emailStatus={data.emailStatus}
+              emailLogs={data.emailLogs || []}
+              canManageSettings={hasAdminPermission('manage_settings')}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+              onRefresh={loadAdminData}
+            />
+          )}
 
-              <div className="lg:col-span-7 space-y-6">
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-4">
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Customer Support Enquiries ({data.enquiries.length})
-                  </h2>
-                  {data.enquiries.length === 0 ? (
-                    <p className="text-sm text-slate-500">No support enquiries yet.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {data.enquiries.map((enq) => (
-                        <div
-                          key={enq.id}
-                          className="border border-[#E4DDD0] rounded-lg p-4 space-y-2"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="font-semibold text-sm text-slate-900">
-                              {enq.subject}
-                            </span>
-                            <select
-                              value={enq.status}
-                              onChange={async (e) => {
-                                const headers = {
-                                  'Content-Type': 'application/json',
-                                  ...(await getAuthHeaders()),
-                                };
-                                await fetch(`/api/admin/enquiries/${enq.id}`, {
-                                  method: 'PATCH',
-                                  headers,
-                                  body: JSON.stringify({ status: e.target.value }),
-                                });
-                                loadAdminData();
-                              }}
-                              className="text-xs border border-slate-300 rounded px-2 py-1"
-                            >
-                              <option value="open">Open</option>
-                              <option value="in_progress">In Progress</option>
-                              <option value="resolved">Resolved</option>
-                            </select>
-                          </div>
-                          <p className="text-xs text-slate-500">
-                            From {enq.name} ({enq.email})
-                          </p>
-                          <p className="text-sm text-slate-700">{enq.message}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-3">
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Newsletter &amp; Free Resource Subscribers ({data.subscribers.length})
-                  </h2>
-                  {data.subscribers.map((s) => (
-                    <div
-                      key={s.id}
-                      className="flex items-center justify-between text-xs border-b border-slate-100 pb-2"
-                    >
-                      <span>{s.email}</span>
-                      <span className="text-slate-500">{s.source}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          {tab === 'reports' && (
+            <AdminReportsTab
+              products={data.products || []}
+              analytics={data.analytics}
+              canExport={hasAdminPermission('export_reports')}
+              getAuthHeaders={getAuthHeaders}
+              onToast={showToast}
+            />
           )}
 
           {/* TAB 7: SETTINGS & AUDIT LOGS */}
@@ -3117,21 +3371,41 @@ export function AdminPage() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Customer Support Email
-                    </label>
-                    <input
-                      type="email"
-                      value={settingsForm.support_email || ''}
-                      onChange={(e) =>
-                        setSettingsForm({
-                          ...settingsForm,
-                          support_email: e.target.value,
-                        })
-                      }
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        Customer Support Email
+                      </label>
+                      <input
+                        type="email"
+                        value={settingsForm.support_email || ''}
+                        onChange={(e) =>
+                          setSettingsForm({
+                            ...settingsForm,
+                            support_email: e.target.value,
+                          })
+                        }
+                        placeholder="info@jeneconk.com"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        Business &amp; Partnerships Email
+                      </label>
+                      <input
+                        type="email"
+                        value={settingsForm.business_email || ''}
+                        onChange={(e) =>
+                          setSettingsForm({
+                            ...settingsForm,
+                            business_email: e.target.value,
+                          })
+                        }
+                        placeholder="business@jeneconk.com"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                      />
+                    </div>
                   </div>
 
                   <div>
@@ -3228,7 +3502,15 @@ export function AdminPage() {
                         <span className="font-mono font-semibold text-slate-900">
                           {log.action}
                         </span>
+                        {log.result && log.result !== 'success' && (
+                          <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-mono uppercase rounded bg-rose-100 text-rose-800">
+                            {log.result}
+                          </span>
+                        )}
                         <p className="text-slate-600 mt-0.5">{log.details}</p>
+                        {log.reason && (
+                          <p className="text-slate-500 italic mt-0.5">Reason: {log.reason}</p>
+                        )}
                         <p className="text-slate-400 mt-0.5">{log.adminEmail}</p>
                       </div>
                       <span className="text-slate-400 shrink-0 font-mono">
@@ -3295,6 +3577,8 @@ export function AdminPage() {
           )}
         </>
       ) : null}
+        </div>
+      </div>
     </div>
   );
 }

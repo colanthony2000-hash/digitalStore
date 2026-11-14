@@ -1,3 +1,5 @@
+import type { AdminPermission, UserRole } from '../lib/rbac';
+
 export type CurrencyCode = 'NGN' | 'USD';
 
 export interface ProductFaq {
@@ -119,6 +121,7 @@ export interface StoreSettingsPublic {
   freePromoHeadline?: string;
   freePromoSubtext?: string;
   supportEmail: string;
+  businessEmail?: string;
   whatsappNumber: string;
   pinterestTagId: string;
   pinterestTagConfigured: boolean;
@@ -131,5 +134,89 @@ export interface AuthUserProfile {
   uid: string;
   email: string;
   fullName: string | null;
-  role: 'customer' | 'admin';
+  role: UserRole;
+  accountStatus: 'active' | 'suspended';
+  emailVerified: boolean;
+  authProvider: string;
+  termsAcceptedAt?: string | null;
+  lastLoginAt?: string | null;
+  suspendedReason?: string | null;
+  createdAt?: string;
+  permissions?: AdminPermission[];
+}
+
+export interface SupportCaseHistoryEntry {
+  timestamp: string;
+  actorEmail: string;
+  action: string;
+  note: string;
+}
+
+export interface SupportCaseRecord {
+  id: number;
+  caseReference: string;
+  userId: number | null;
+  customerName: string;
+  customerEmail: string;
+  category: string;
+  subject: string;
+  description: string;
+  relatedProductSlug: string | null;
+  relatedOrderId: number | null;
+  transactionReference: string | null;
+  status: 'open' | 'in_progress' | 'resolved' | 'escalated';
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  assignedAdminEmail: string | null;
+  internalNotes?: string | null;
+  resolutionSummary: string | null;
+  resolutionHistory: SupportCaseHistoryEntry[];
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountEventRecord {
+  id: number;
+  userId: number | null;
+  email: string | null;
+  eventType: string;
+  details: string | null;
+  ipAddress?: string | null;
+  createdAt: string;
+}
+
+export interface InfraComponentReport {
+  id: string;
+  name: string;
+  status: 'operational' | 'degraded' | 'not_configured' | 'partial' | 'unknown';
+  statusLabel: string;
+  lastCheckedAt: string;
+  lastErrorAt: string | null;
+  errorSummary: string | null;
+  recommendedAction: string;
+  metrics: { label: string; value: string }[];
+}
+
+export interface SystemEventRecord {
+  id: number;
+  component: string;
+  severity: 'info' | 'warning' | 'error';
+  eventType: string;
+  message: string;
+  details: string | null;
+  resolved: boolean;
+  createdAt: string;
+}
+
+export interface EmailLogRecord {
+  id: number;
+  recipientEmail: string;
+  fromAddress: string;
+  replyTo: string | null;
+  subject: string;
+  category: string;
+  provider: string;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
 }

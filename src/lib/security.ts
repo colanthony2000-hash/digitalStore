@@ -165,6 +165,8 @@ export async function recordAuditLog(params: {
   targetType: string;
   targetId?: string | number | null;
   details?: string;
+  reason?: string;
+  result?: 'success' | 'denied' | 'failed';
 }) {
   try {
     await db.insert(auditLogs).values({
@@ -174,6 +176,8 @@ export async function recordAuditLog(params: {
       targetType: params.targetType,
       targetId: params.targetId != null ? String(params.targetId) : null,
       details: params.details || null,
+      reason: params.reason ? params.reason.slice(0, 500) : null,
+      result: params.result || 'success',
     });
   } catch (err) {
     console.error('Failed to write audit log:', err);

@@ -156,6 +156,10 @@ export function ContactPage() {
   })();
   const [name, setName] = useState(firebaseUser?.displayName || '');
   const [email, setEmail] = useState(firebaseUser?.email || '');
+  const [category, setCategory] = useState(
+    initialPlatform ? 'business_licensing' : 'general_enquiry'
+  );
+  const [transactionReference, setTransactionReference] = useState('');
   const [subject, setSubject] = useState(
     initialProduct
       ? `Purchase enquiry: ${initialProduct}`
@@ -185,6 +189,8 @@ export function ContactPage() {
         body: JSON.stringify({
           name,
           email,
+          category,
+          transactionReference: transactionReference.trim() || undefined,
           subject,
           productSlug: productSlug || undefined,
           message,
@@ -196,6 +202,7 @@ export function ContactPage() {
         return;
       }
       setSubject('');
+      setTransactionReference('');
       setMessage('');
       setStatus({ type: 'success', text: data.message });
     } catch {
@@ -208,6 +215,9 @@ export function ContactPage() {
   const whatsappUrl = settings.whatsappNumber
     ? `https://wa.me/${settings.whatsappNumber.replace(/[^0-9]/g, '')}`
     : null;
+
+  const supportInbox = settings.supportEmail || 'info@jeneconk.com';
+  const businessInbox = settings.businessEmail || 'business@jeneconk.com';
 
   return (
     <div className="py-14 sm:py-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -227,7 +237,7 @@ export function ContactPage() {
             </h1>
           </div>
           <p className="text-base text-[#4A505C] leading-relaxed">
-            Have a question about a planner, template format, Selar order delivery, or team licensing? Reach out to our Port Harcourt support team.
+            Have a question about a planner, template format, Selar order delivery, account access, or institutional team licensing? Submit a tracked support case below.
           </p>
 
           <div className="bg-white border border-[#E4DDD0] rounded-sm p-6 space-y-4">
@@ -235,14 +245,35 @@ export function ContactPage() {
               <Mail className="w-5 h-5 text-[#0A264A] shrink-0 mt-0.5" />
               <div>
                 <h2 className="font-display text-base font-semibold text-[#171A21]">
-                  Support Email
+                  Customer Support
                 </h2>
                 <a
-                  href={`mailto:${settings.supportEmail}`}
+                  href={`mailto:${supportInbox}`}
                   className="text-sm text-[#0A264A] hover:underline"
                 >
-                  {settings.supportEmail}
+                  {supportInbox}
                 </a>
+                <p className="text-xs text-[#6D7380] mt-0.5">
+                  Orders, downloads, login &amp; account assistance
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 pt-3 border-t border-[#EDE7DA]">
+              <Mail className="w-5 h-5 text-[#B88329] shrink-0 mt-0.5" />
+              <div>
+                <h2 className="font-display text-base font-semibold text-[#171A21]">
+                  Business &amp; Institutional Licensing
+                </h2>
+                <a
+                  href={`mailto:${businessInbox}`}
+                  className="text-sm text-[#0A264A] hover:underline"
+                >
+                  {businessInbox}
+                </a>
+                <p className="text-xs text-[#6D7380] mt-0.5">
+                  Partnerships, school/corporate licences &amp; ecosystem enquiries
+                </p>
               </div>
             </div>
 
@@ -278,7 +309,7 @@ export function ContactPage() {
             className="bg-white border border-[#D5CCB9] rounded-sm p-6 sm:p-8 space-y-4"
           >
             <h2 className="font-display text-2xl font-semibold text-[#171A21]">
-              Send a Support Enquiry
+              Open a Support Case
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -310,6 +341,39 @@ export function ContactPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-[#4A505C] mb-1">
+                  Issue Category
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm bg-[#FAF8F4] border border-[#D5CCB9] rounded-sm"
+                >
+                  <option value="general_enquiry">General Store Enquiry</option>
+                  <option value="paid_no_access">Paid Checkout / Missing Access</option>
+                  <option value="broken_download">Broken or Expired Download Link</option>
+                  <option value="account_login">Account Login or Registration</option>
+                  <option value="email_verification">Email Verification / Password Reset</option>
+                  <option value="order_status">Order / Transaction Status</option>
+                  <option value="business_licensing">Business &amp; Institutional Licensing</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#4A505C] mb-1">
+                  Order / Transaction Ref (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={transactionReference}
+                  onChange={(e) => setTransactionReference(e.target.value)}
+                  placeholder="e.g. JNK-... or Selar receipt ID"
+                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-[#FAF8F4] border border-[#D5CCB9] rounded-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-[#4A505C] mb-1">
                   Subject
                 </label>
                 <input
@@ -317,7 +381,7 @@ export function ContactPage() {
                   required
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  placeholder="Download issue, licensing, or product question"
+                  placeholder="Brief summary of your request"
                   className="w-full px-3.5 py-2.5 text-sm bg-[#FAF8F4] border border-[#D5CCB9] rounded-sm"
                 />
               </div>
@@ -349,7 +413,7 @@ export function ContactPage() {
                 required
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Describe your question or include your order reference if applicable..."
+                placeholder="Describe your question or issue clearly..."
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FAF8F4] border border-[#D5CCB9] rounded-sm"
               />
             </div>
@@ -371,7 +435,7 @@ export function ContactPage() {
               disabled={sending}
               className="px-7 py-3 text-xs uppercase tracking-[0.14em] font-semibold text-[#FAF8F4] bg-[#0A264A] hover:bg-[#061830] rounded-sm disabled:opacity-60 min-h-[44px]"
             >
-              {sending ? 'Submitting...' : 'Submit Support Enquiry'}
+              {sending ? 'Submitting...' : 'Submit Support Case'}
             </button>
           </form>
         </div>
@@ -436,7 +500,7 @@ export function PolicyPage({
         },
         {
           h: '3. How to Request Assistance',
-          p: 'Contact support@jeneconk.com or use our Customer Assistance page with your order reference within 14 days of purchase. For orders processed through Selar, our team will coordinate resolution in line with Selar transaction records.',
+          p: 'Contact info@jeneconk.com or use our Customer Assistance page with your order reference within 14 days of purchase. For orders processed through Selar, our team will coordinate resolution in line with Selar transaction records.',
         },
       ],
     },
