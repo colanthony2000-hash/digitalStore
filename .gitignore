@@ -1,6 +1,9 @@
 node_modules/
 build/
 dist/
+public/index.html
+public/assets/index-*.js
+public/assets/index-*.css
 coverage/
 .DS_Store
 *.log

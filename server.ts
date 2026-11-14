@@ -129,7 +129,9 @@ app.get('/sitemap.xml', async (req, res) => {
 
 // Vite dev middleware vs static production build
 const distDir = path.resolve(process.cwd(), 'dist');
-const isProd = process.env.NODE_ENV === 'production' && fs.existsSync(distDir);
+const staticDir = process.env.VERCEL === '1' ? path.resolve(process.cwd(), 'public') : distDir;
+const isProd =
+  process.env.NODE_ENV === 'production' && fs.existsSync(path.join(staticDir, 'index.html'));
 
 if (!isProd) {
   const { createServer: createViteServer } = await import('vite');
@@ -139,7 +141,6 @@ if (!isProd) {
   });
   app.use(vite.middlewares);
 } else {
-  const staticDir = process.env.VERCEL === '1' ? path.resolve(process.cwd(), 'public') : distDir;
   const indexFile = path.join(staticDir, 'index.html');
   app.use(express.static(staticDir));
   app.get('/{*splat}', (_req, res) => {
