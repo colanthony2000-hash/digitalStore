@@ -25,6 +25,8 @@ Set `DOWNLOAD_SIGNING_SECRET` to a strong secret in Secret Manager before enabli
 
 Add `digital.jeneconk.com` under Firebase Authentication's authorized domains before using Google sign-in on the custom domain. Grant the Cloud Run service identity the Firebase Authentication Admin permissions needed for administrative user lookups and refresh-token revocation.
 
+For branded verification and password-reset results, set the Firebase Authentication email-template **Action URL** for email verification and password reset to `https://digital.jeneconk.com/account`. The account page handles Firebase's `mode` and one-time `oobCode` parameters and can show a clear success or recovery message. Confirm `digital.jeneconk.com` is authorized in Firebase Authentication. Firebase's default `firebaseapp.com` handler may show its generic expired/already-used page; a custom handler improves recovery but cannot make an expired or previously consumed link valid.
+
 Map `digital.jeneconk.com` to the deployed Cloud Run service after deployment. Keep the minimum instance count at zero to allow scale-to-zero.
 
 **Persistent uploads:** the current admin upload paths are local filesystem directories. Cloud Run's local filesystem is ephemeral, so uploaded product files need a persistent Cloud Storage bucket mount before using admin uploads or protected downloads in production.
