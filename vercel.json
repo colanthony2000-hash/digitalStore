@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npx vite build",
   "installCommand": "npm install",
+  "outputDirectory": "public",
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -17,6 +20,18 @@
     {
       "source": "/sitemap.xml",
       "destination": "https://digitalstore-899601549691.europe-west3.run.app/sitemap.xml"
+    },
+    {
+      "source": "/health",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/health"
+    },
+    {
+      "source": "/readyz",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/readyz"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

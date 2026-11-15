@@ -21,7 +21,7 @@ export default defineConfig(() => {
     },
     build: isVercelBuild
       ? {
-          // Vercel's Express runtime serves static files from /public via its CDN.
+          // Vercel's static deployment uses /public as its output directory.
           // Preserve checked-in product images while writing the Vite bundle here.
           outDir: 'public',
           emptyOutDir: false,
