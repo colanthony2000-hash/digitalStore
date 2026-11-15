@@ -9,6 +9,7 @@ import {
   applyActionCode,
   browserLocalPersistence,
   browserSessionPersistence,
+  checkActionCode,
   confirmPasswordReset,
   createUserWithEmailAndPassword,
   EmailAuthProvider,
@@ -85,7 +86,7 @@ interface StoreContextValue {
   reauthenticateWithPassword: (password: string) => Promise<AuthActionResult>;
   reauthenticateWithGoogle: () => Promise<AuthActionResult>;
   invalidateOtherSessions: (reason?: string) => Promise<AuthActionResult>;
-  refreshAccountProfile: () => Promise<void>;
+  refreshAccountProfile: () => Promise<boolean>;
   signOut: () => Promise<void>;
   getAuthHeaders: () => Promise<Record<string, string>>;
   // Cart
@@ -260,11 +261,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const refreshAccountProfile = useCallback(async () => {
-    if (!auth.currentUser) return;
-    await auth.currentUser.reload();
-    setFirebaseUser(auth.currentUser);
-    await syncAccountProfile(auth.currentUser);
+  const refreshAccountProfile = useCallback(async (): Promise<boolean> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return false;
+    await currentUser.reload();
+    const refreshedUser = auth.currentUser;
+    if (!refreshedUser) return false;
+    setFirebaseUser(refreshedUser);
+    await syncAccountProfile(refreshedUser);
+    return refreshedUser.emailVerified;
   }, [syncAccountProfile]);
 
   useEffect(() => {
@@ -302,21 +307,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
       await updateProfile(cred.user, { displayName: fullName.trim() });
       await cred.user.getIdToken(true);
+      let verificationEmailSent = false;
       try {
         await sendEmailVerification(cred.user, {
           url: `${window.location.origin}/account`,
           handleCodeInApp: false,
         });
+        verificationEmailSent = true;
       } catch {
-        // Non-fatal if browser rate limits duplicate email sends
+        // Account creation succeeds even if Firebase cannot send the email.
       }
       await logAuthTelemetry('registered', 'Email/password registration.', cred.user, true);
       await syncAccountProfile(cred.user);
       return {
         ok: true,
         needsVerification: !cred.user.emailVerified,
-        message:
-          'Account created. We have sent a verification link to your email address—please verify your inbox.',
+        message: verificationEmailSent
+          ? 'Account created. We sent a verification link to your email address. Please check your inbox and spam folder.'
+          : 'Account created, but we could not send a verification email. Sign in and use Resend Verification Email to try again.',
       };
     } catch (err: any) {
       const code = err?.code || '';
@@ -499,21 +507,49 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const applyVerificationOobCode = async (oobCode: string): Promise<AuthActionResult> => {
     try {
+      const actionInfo = await checkActionCode(auth, oobCode);
+      const actionEmail = actionInfo.data.email?.trim().toLowerCase() || '';
       await applyActionCode(auth, oobCode);
-      if (auth.currentUser) {
-        await auth.currentUser.reload();
-        await auth.currentUser.getIdToken(true);
-        await logAuthTelemetry('email_verified', 'Email address verified via link.', auth.currentUser);
-        await syncAccountProfile(auth.currentUser);
+      const currentUser = auth.currentUser;
+      if (
+        currentUser &&
+        actionEmail &&
+        currentUser.email?.trim().toLowerCase() === actionEmail
+      ) {
+        await currentUser.reload();
+        await currentUser.getIdToken(true);
+        await logAuthTelemetry('email_verified', 'Email address verified via link.', currentUser);
+        await syncAccountProfile(currentUser);
+        return {
+          ok: true,
+          message: 'Your email is verified. You’re all set.',
+        };
       }
       return {
         ok: true,
-        message: 'Your email address is now verified.',
+        message: actionEmail
+          ? `Email verified for ${actionInfo.data.email}. Sign in with that address to continue.`
+          : 'Your email address is now verified. Sign in to continue.',
       };
-    } catch {
+    } catch (err: any) {
+      if (err?.code === 'auth/expired-action-code') {
+        return {
+          ok: false,
+          message:
+            'This verification link has expired. Sign in to your account and request a fresh verification email.',
+        };
+      }
+      if (err?.code === 'auth/invalid-action-code') {
+        return {
+          ok: false,
+          message:
+            'This verification link has already been used or is no longer valid. Sign in to check your email status or request a new link.',
+        };
+      }
       return {
         ok: false,
-        message: 'This verification link is invalid or has expired. Sign in to request a new one.',
+        message:
+          'We couldn’t verify this email. Sign in to check your account or request a fresh verification email.',
       };
     }
   };

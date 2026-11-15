@@ -1052,8 +1052,16 @@ export function AccountPage() {
                 <button
                   type="button"
                   onClick={async () => {
-                    await refreshAccountProfile();
-                    setStatusMessage('Account verification status refreshed.');
+                    try {
+                      const verified = await refreshAccountProfile();
+                      setStatusMessage(
+                        verified
+                          ? `Email verified for ${firebaseUser.email || 'your account'}. You’re all set.`
+                          : `We still don’t see verification for ${firebaseUser.email || 'this account'}. Open the newest email link or resend the verification email.`
+                      );
+                    } catch {
+                      setStatusMessage('We could not refresh your email status. Please try again.');
+                    }
                   }}
                   className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-amber-300 text-amber-950 rounded-sm hover:bg-amber-100"
                 >
@@ -1095,7 +1103,7 @@ export function AccountPage() {
           )}
 
           {statusMessage && (
-            <div className="bg-[#0A264A] text-[#FAF8F4] text-sm px-4 py-3 rounded-sm">
+            <div role="status" aria-live="polite" className="bg-[#0A264A] text-[#FAF8F4] text-sm px-4 py-3 rounded-sm">
               {statusMessage}
             </div>
           )}
