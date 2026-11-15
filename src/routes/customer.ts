@@ -1,6 +1,5 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
+import { Readable } from 'node:stream';
 import { Router } from 'express';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
@@ -28,13 +27,9 @@ import {
 } from '../lib/security.ts';
 import { sendTransactionalEmail } from '../lib/email.ts';
 import { recordAccountEvent, recordSystemEvent } from '../lib/telemetry.ts';
+import { getObject, isNeonObjectStorage, objectExists, objectKeyFromProductPath, localObjectPath } from '../lib/object-storage.ts';
 
 const router = Router();
-const PROTECTED_STORAGE_DIR = path.resolve(
-  process.cwd(),
-  'storage',
-  'protected_products'
-);
 const customerWriteLimiter = createRateLimiter(30, 60_000);
 
 router.get('/account/me', requireAuth, async (req: AuthRequest, res) => {
@@ -461,22 +456,10 @@ router.get('/downloads/:token', async (req, res) => {
       }
     }
 
-    let resolvedPath: string | null = null;
-    if (product.protectedFilePath) {
-      const candidate = path.resolve(
-        PROTECTED_STORAGE_DIR,
-        path.basename(product.protectedFilePath)
-      );
-      if (
-        candidate.startsWith(PROTECTED_STORAGE_DIR + path.sep) &&
-        fs.existsSync(candidate) &&
-        fs.statSync(candidate).isFile()
-      ) {
-        resolvedPath = candidate;
-      }
-    }
-
-    if (!resolvedPath) {
+    const protectedKey = product.protectedFilePath
+      ? objectKeyFromProductPath(product.protectedFilePath)
+      : null;
+    if (!protectedKey || !(await objectExists(protectedKey))) {
       await recordSystemEvent({
         component: 'storage',
         severity: 'error',
@@ -489,6 +472,13 @@ router.get('/downloads/:token', async (req, res) => {
           'This digital file is currently unavailable for download. No download attempt has been deducted from your licence. Please contact info@jeneconk.com.',
       });
     }
+
+    const safeSlug = product.slug.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeVersion = String(product.version).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const ext = product.fileFormat ? `.${product.fileFormat.toLowerCase().replace(/[^a-z0-9]/g, '')}` : '';
+    const downloadName = `${safeSlug}-v${safeVersion}${ext}`;
+    const remoteObject = isNeonObjectStorage() ? await getObject(protectedKey!) : null;
+    const localFilePath = remoteObject ? null : await localObjectPath(protectedKey!);
 
     if (payload.orderItemId !== null) {
       const updatedItems = await db
@@ -515,8 +505,19 @@ router.get('/downloads/:token', async (req, res) => {
       ipAddress: (req.ip || req.socket.remoteAddress || '').slice(0, 64),
     });
 
-    const ext = path.extname(resolvedPath) || `.${product.fileFormat.toLowerCase()}`;
-    return res.download(resolvedPath, `${product.slug}-v${product.version}${ext}`);
+    if (remoteObject?.body) {
+      res.setHeader('Content-Type', remoteObject.headers.get('content-type') || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+      const contentLength = remoteObject.headers.get('content-length');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      const downloadStream = Readable.fromWeb(remoteObject.body as import('node:stream/web').ReadableStream);
+      downloadStream.on('error', (error) => {
+        console.error('Protected object stream failed:', error);
+        res.destroy(error);
+      });
+      return downloadStream.pipe(res);
+    }
+    return res.download(localFilePath!, downloadName);
   } catch (error: any) {
     console.error('Error serving protected download:', error);
     await recordSystemEvent({

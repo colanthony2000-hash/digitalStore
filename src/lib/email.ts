@@ -52,10 +52,10 @@ export async function getEmailIntegrationStatus(): Promise<EmailIntegrationStatu
 
   const resendConfigured = !isPlaceholderValue(resendKey) && resendKey.length >= 12;
 
-  const provider: 'smtp' | 'resend' | 'unconfigured' = smtpHostConfigured
-    ? 'smtp'
-    : resendConfigured
+  const provider: 'smtp' | 'resend' | 'unconfigured' = resendConfigured
     ? 'resend'
+    : smtpHostConfigured
+    ? 'smtp'
     : 'unconfigured';
 
   return {

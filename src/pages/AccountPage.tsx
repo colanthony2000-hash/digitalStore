@@ -242,12 +242,17 @@ export function AccountPage() {
     const ref = params.get('checkout_ref') || params.get('reference');
     if (ref) {
       fetch(`/api/checkout/verify/${encodeURIComponent(ref)}`)
-        .then((r) => r.json())
-        .then((data) => {
+        .then(async (r) => ({ ok: r.ok, data: await r.json() }))
+        .then(({ ok, data }) => {
           if (data.verified) {
             setVerifiedReceipt(data);
             clearCart();
             loadAccountData();
+            window.history.replaceState({}, '', '/account');
+          } else if (!ok) {
+            setStatusMessage(
+              data.error || 'Payment is not verified yet. If you were charged, contact support with your payment reference.'
+            );
           }
         })
         .catch(() => {});

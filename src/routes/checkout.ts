@@ -11,11 +11,13 @@ import {
 } from '../db/schema.ts';
 import { optionalAuth, type AuthRequest } from '../middleware/auth.ts';
 import { createRateLimiter, signDownloadToken } from '../lib/security.ts';
-import { getPaystackConfig } from '../lib/integrations.ts';
+import { getPaystackConfig, verifyPaystackWebhookSignature } from '../lib/integrations.ts';
 import { recordSystemEvent } from '../lib/telemetry.ts';
+import { objectExists, objectKeyFromProductPath } from '../lib/object-storage.ts';
 
 const router = Router();
 const checkoutLimiter = createRateLimiter(15, 60_000);
+const verifyLimiter = createRateLimiter(30, 60_000);
 
 async function getActivePaystackConfig() {
   const rows = await db
@@ -66,6 +68,19 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
     if (dbProducts.length === 0 || dbProducts.length !== cleanIds.length) {
       return res.status(400).json({
         error: 'One or more selected products are not enabled for native checkout.',
+      });
+    }
+
+    const deliveryReady = await Promise.all(
+      dbProducts.map(async (product) => {
+        if (!product.protectedFilePath) return false;
+        return objectExists(objectKeyFromProductPath(product.protectedFilePath));
+      })
+    );
+    if (deliveryReady.some((ready) => !ready)) {
+      return res.status(409).json({
+        error:
+          'Native checkout is unavailable for a selected product until its protected download file is uploaded and verified. Selar checkout remains available.',
       });
     }
 
@@ -160,12 +175,13 @@ router.post('/checkout/initialize', checkoutLimiter, optionalAuth, async (req: A
         Authorization: `Bearer ${paystack.secretKey}`,
         'Content-Type': 'application/json',
       },
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         email,
         amount: totalMinor,
         currency,
         reference: orderReference,
-        callback_url: `${callbackBase}/?checkout_ref=${encodeURIComponent(orderReference)}`,
+        callback_url: `${callbackBase.replace(/\/$/, '')}/account?checkout_ref=${encodeURIComponent(orderReference)}`,
         metadata: {
           orderId: createdOrder.id,
           orderReference,
@@ -200,6 +216,9 @@ export async function fulfillVerifiedOrder(reference: string, paidAmount: number
   return db.transaction(async (tx) => {
     const [order] = await tx.select().from(orders).where(eq(orders.paystackReference, reference)).limit(1);
     if (!order) return null;
+    if (order.paymentProvider !== 'paystack' || order.checkoutDestination !== 'native') {
+      return null;
+    }
 
     if (order.paymentStatus === 'paid') {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id));
@@ -249,7 +268,7 @@ export async function fulfillVerifiedOrder(reference: string, paidAmount: number
   });
 }
 
-router.get('/checkout/verify/:reference', async (req, res) => {
+router.get('/checkout/verify/:reference', verifyLimiter, async (req, res) => {
   try {
     const paystack = await getActivePaystackConfig();
     if (!paystack.nativeCheckoutActive) {
@@ -264,6 +283,7 @@ router.get('/checkout/verify/:reference', async (req, res) => {
         headers: {
           Authorization: `Bearer ${paystack.secretKey}`,
         },
+        signal: AbortSignal.timeout(15_000),
       }
     );
 
@@ -301,7 +321,13 @@ router.get('/checkout/verify/:reference', async (req, res) => {
 
     res.json({
       verified: true,
-      order: result.order,
+      order: {
+        orderReference: result.order.orderReference,
+        currency: result.order.currency,
+        totalMinor: result.order.totalMinor,
+        paymentStatus: result.order.paymentStatus,
+        orderStatus: result.order.orderStatus,
+      },
       items: result.items,
       downloadLinks,
     });
@@ -314,28 +340,28 @@ router.get('/checkout/verify/:reference', async (req, res) => {
 router.post('/webhooks/paystack', async (req, res) => {
   try {
     const paystack = await getActivePaystackConfig();
-    if (!paystack.webhookSecretConfigured) {
+    if (!paystack.webhookVerificationConfigured) {
       return res.status(503).json({
         received: false,
         disabled: true,
-        error: 'Paystack webhook signature verification is disabled until genuine credentials are configured.',
+        error: 'Paystack webhook signature verification is not configured.',
       });
     }
 
-    const signature = req.headers['x-paystack-signature'];
     const rawBody = (req as any).rawBody as Buffer | undefined;
-    if (typeof signature !== 'string' || !rawBody) {
+    if (!rawBody) {
       return res.status(400).json({ error: 'Missing signature or payload.' });
     }
 
-    const computed = crypto
-      .createHmac('sha512', paystack.webhookSecret)
-      .update(rawBody)
-      .digest('hex');
-
-    const sigBuf = Buffer.from(signature);
-    const compBuf = Buffer.from(computed);
-    if (sigBuf.length !== compBuf.length || !crypto.timingSafeEqual(sigBuf, compBuf)) {
+    const validSignature = verifyPaystackWebhookSignature(
+      {
+        paystackSignature: req.headers['paystack-signature'],
+        legacySignature: req.headers['x-paystack-signature'],
+      },
+      rawBody,
+      paystack
+    );
+    if (!validSignature) {
       await recordSystemEvent({
         component: 'payments',
         severity: 'warning',

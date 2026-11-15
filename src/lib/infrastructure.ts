@@ -17,6 +17,7 @@ import {
   getPinterestConfig,
 } from './integrations.ts';
 import { isDownloadSigningSecretConfigured } from './security.ts';
+import { isNeonObjectStorage, isObjectStorageConfigured, objectExists, objectKeyFromProductPath } from './object-storage.ts';
 
 export interface InfraComponentReport {
   id: string;
@@ -141,13 +142,36 @@ export async function gatherInfrastructureReport(
   const protectedDir = path.resolve(process.cwd(), 'storage', 'protected_products');
   const pubStats = getDirectoryStats(publicDir);
   const protStats = getDirectoryStats(protectedDir);
-  const missingProtectedFiles = allProductsRows.filter((p) => {
-    if (!p.protectedFilePath) return false;
-    const candidate = path.resolve(protectedDir, path.basename(p.protectedFilePath));
-    return !fs.existsSync(candidate);
-  });
+  let neonStorage = false;
+  let storageConfigured = false;
+  try {
+    neonStorage = isNeonObjectStorage();
+    storageConfigured = isObjectStorageConfigured();
+  } catch {
+    storageConfigured = false;
+  }
+  let missingProtectedFiles: typeof allProductsRows = [];
+  let storageProbeError: string | null = null;
+  if (neonStorage && storageConfigured) {
+    try {
+      const refs = allProductsRows.filter((p) => Boolean(p.protectedFilePath));
+      const results = await Promise.all(refs.map(async (p) => ({
+        product: p,
+        exists: await objectExists(objectKeyFromProductPath(p.protectedFilePath!)),
+      })));
+      missingProtectedFiles = results.filter((r) => !r.exists).map((r) => r.product);
+    } catch (error: any) {
+      storageProbeError = error?.message || 'Object storage verification failed.';
+    }
+  } else {
+    missingProtectedFiles = allProductsRows.filter((p) => {
+      if (!p.protectedFilePath) return false;
+      const candidate = path.resolve(protectedDir, path.basename(p.protectedFilePath));
+      return !fs.existsSync(candidate);
+    });
+  }
   const storageErr = latestErrorFor('storage');
-  const storageHealthy = pubStats.exists && pubStats.writable && protStats.exists && protStats.writable;
+  const storageHealthy = storageConfigured && (neonStorage || (pubStats.exists && pubStats.writable && protStats.exists && protStats.writable)) && !storageProbeError;
 
   // 4. Authentication Probe (Firebase client config + Admin SDK capability)
   const firebaseProjectConfigured = Boolean(
@@ -162,7 +186,7 @@ export async function gatherInfrastructureReport(
   } catch {
     adminSdkManagementAvailable = false;
     adminSdkCheckNote =
-      'ID Token verification active; Admin SDK user-management RPCs require GCP service account credentials';
+      'ID Token verification active; attach a Cloud Run runtime identity with Firebase Authentication admin permissions';
   }
   const authErr = latestErrorFor('authentication');
 
@@ -203,7 +227,7 @@ export async function gatherInfrastructureReport(
     },
     {
       id: 'database',
-      name: 'Cloud SQL PostgreSQL Database',
+      name: process.env.DATABASE_URL ? 'Neon PostgreSQL Database' : 'PostgreSQL Database',
       status: dbConnected ? 'operational' : 'degraded',
       statusLabel: dbConnected ? 'Connected' : 'Connection Failed',
       lastCheckedAt: checkedAt,
@@ -211,7 +235,7 @@ export async function gatherInfrastructureReport(
       errorSummary: dbError || latestErrorFor('database')?.message || null,
       recommendedAction: dbConnected
         ? 'PostgreSQL schema and connection pool healthy.'
-        : 'Check Cloud SQL proxy/host connectivity and database credentials.',
+        : 'Check PostgreSQL endpoint, TLS configuration, and database credentials.',
       metrics: [
         { label: 'Connectivity', value: dbConnected ? 'Connected' : 'Disconnected' },
         { label: 'Measured Query Latency', value: dbLatencyMs !== null ? `${dbLatencyMs} ms` : 'Unavailable' },
@@ -226,7 +250,7 @@ export async function gatherInfrastructureReport(
       status: !storageHealthy || missingProtectedFiles.length > 0 || storageErr ? 'degraded' : 'operational',
       statusLabel:
         !storageHealthy
-          ? 'Directory Issue'
+          ? 'Storage Configuration or Connection Issue'
           : missingProtectedFiles.length > 0
           ? `${missingProtectedFiles.length} Missing File Reference(s)`
           : 'Writable & Ready',
@@ -235,15 +259,24 @@ export async function gatherInfrastructureReport(
       errorSummary:
         storageErr?.message ||
         (missingProtectedFiles.length > 0
-          ? `Protected file missing on disk for: ${missingProtectedFiles.map((m) => m.name).join(', ')}`
+          ? `Protected file missing from storage for: ${missingProtectedFiles.map((m) => m.name).join(', ')}`
+          : storageProbeError
+          ? storageProbeError
           : null),
       recommendedAction:
         missingProtectedFiles.length > 0
           ? 'Re-upload missing protected digital files via Admin -> Products.'
-          : 'Local upload and protected asset directories are writable.',
+          : storageHealthy
+          ? 'Configured object storage and protected asset references are available.'
+          : 'Configure Neon Object Storage; production uploads cannot use the container filesystem.',
       metrics: [
-        { label: 'Public Uploads Dir', value: pubStats.exists ? `${pubStats.fileCount} files (${formatBytes(pubStats.totalBytes)})` : 'Missing' },
-        { label: 'Protected Assets Dir', value: protStats.exists ? `${protStats.fileCount} files (${formatBytes(protStats.totalBytes)})` : 'Missing' },
+        { label: 'Storage Backend', value: storageConfigured ? (neonStorage ? 'Neon Object Storage' : 'Local development storage') : 'Not configured' },
+        {
+          label: 'Protected Asset References',
+          value: storageProbeError
+            ? 'Verification failed'
+            : `${allProductsRows.filter((p) => p.protectedFilePath).length - missingProtectedFiles.length} available / ${allProductsRows.filter((p) => p.protectedFilePath).length} checked`,
+        },
         { label: 'Download Token Signing', value: signingConfigured ? 'Configured (HMAC-SHA256)' : 'Ephemeral Dev Secret' },
         { label: 'Provider Disk Quota', value: 'Not exposed by runtime environment' },
       ],
@@ -258,7 +291,7 @@ export async function gatherInfrastructureReport(
       errorSummary: authErr?.message || null,
       recommendedAction: adminSdkManagementAvailable
         ? 'Email/Password, Google Sign-In, verification, and Admin SDK token revocation ready.'
-        : 'Email/Password, Google Sign-In, verification, and password reset emails are operational. Provision GCP service account credentials if server-side Admin SDK user listing is needed later.',
+        : 'Email/Password, Google Sign-In, verification, and password reset emails are operational. Check Cloud Run runtime identity permissions for server-side user management.',
       metrics: [
         { label: 'Firebase Project', value: firebaseConfig.projectId || 'Not configured' },
         { label: 'Email & Password Auth', value: firebaseProjectConfigured ? 'Enabled' : 'Not configured' },
@@ -285,7 +318,7 @@ export async function gatherInfrastructureReport(
         { label: 'Selar External Uptime', value: 'Not monitored (external platform)' },
         { label: 'Paystack Native Toggle', value: paystack.nativeCheckoutToggle ? 'Enabled' : 'Disabled (Stage 1)' },
         { label: 'PAYSTACK_SECRET_KEY', value: paystack.secretKeyConfigured ? 'Configured' : 'Not configured' },
-        { label: 'PAYSTACK_WEBHOOK_SECRET', value: paystack.webhookSecretConfigured ? 'Configured' : 'Not configured (Webhook returns 503)' },
+        { label: 'Paystack Webhook Signature', value: paystack.webhookSecretConfigured ? 'Dedicated signing secret configured' : paystack.webhookVerificationConfigured ? 'Legacy secret-key signature fallback' : 'Not configured' },
       ],
     },
     {
