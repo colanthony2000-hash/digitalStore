@@ -112,6 +112,8 @@ interface AdminOverviewData {
       secretKeyConfigured: boolean;
       publicKeyConfigured: boolean;
       webhookSecretConfigured: boolean;
+      webhookVerificationConfigured: boolean;
+      testKeyBlockedInProduction: boolean;
       nativeCheckoutActive: boolean;
     };
     pinterest: {
@@ -3246,17 +3248,21 @@ export function AdminPage() {
                     <div className="bg-white border border-[#E4DDD0] rounded-md px-3 py-2">
                       <span className="text-slate-500 block">PAYSTACK_SECRET_KEY</span>
                       <span className="font-mono font-semibold text-slate-900">
-                        {data.integrationStatus?.paystack.secretKeyConfigured
+                        {data.integrationStatus?.paystack.testKeyBlockedInProduction
+                          ? 'Test key blocked on production service'
+                          : data.integrationStatus?.paystack.secretKeyConfigured
                           ? 'Configured'
                           : 'Disabled (Unset or Placeholder)'}
                       </span>
                     </div>
                     <div className="bg-white border border-[#E4DDD0] rounded-md px-3 py-2">
-                      <span className="text-slate-500 block">PAYSTACK_WEBHOOK_SECRET</span>
+                      <span className="text-slate-500 block">Paystack webhook signature</span>
                       <span className="font-mono font-semibold text-slate-900">
                         {data.integrationStatus?.paystack.webhookSecretConfigured
-                          ? 'Active (HMAC-SHA512)'
-                          : 'Disabled (Unset or Placeholder)'}
+                          ? 'Dedicated signing secret configured'
+                          : data.integrationStatus?.paystack.webhookVerificationConfigured
+                          ? 'Legacy secret-key signature fallback'
+                          : 'Not configured'}
                       </span>
                     </div>
                     <div className="bg-white border border-[#E4DDD0] rounded-md px-3 py-2">
@@ -3541,13 +3547,14 @@ export function AdminPage() {
 
               <div className="bg-white border border-[#E4DDD0] rounded-xl p-6 space-y-3">
                 <h2 className="font-display text-base font-bold text-slate-900">
-                  Stage 2 Paystack Activation Guide
+                  Native Paystack Setup
                 </h2>
                 <ol className="list-decimal pl-5 space-y-2 text-xs leading-relaxed">
-                  <li>Configure PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY, PAYSTACK_WEBHOOK_SECRET, and DOWNLOAD_SIGNING_SECRET in server environment secrets.</li>
-                  <li>Point your Paystack Dashboard webhook URL to /api/webhooks/paystack.</li>
-                  <li>Enable Stage 2 Native Checkout under Settings and mark eligible products with nativeCheckoutEligible.</li>
-                  <li>All transactions are verified server-side via Paystack API and HMAC-SHA512 webhook validation before issuing 15-minute signed download URLs.</li>
+                  <li>Store the Paystack test secret key, current webhook signing secret, and download signing secret in the server's secret store. The public key is not a secret.</li>
+                  <li>Point the Paystack Dashboard webhook to https://digital.jeneconk.com/api/webhooks/paystack.</li>
+                  <li>Upload and verify the protected master file for each product to be sold through native Paystack. Selar-delivered products do not need an app copy unless you also enable native sales.</li>
+                  <li>Enable Native Paystack Checkout under Settings and mark only products with verified protected files as eligible.</li>
+                  <li>Transactions are verified server-side against Paystack status, amount, and currency; signed webhooks are validated before issuing 15-minute download links.</li>
                 </ol>
               </div>
 

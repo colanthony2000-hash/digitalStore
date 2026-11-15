@@ -741,6 +741,12 @@ async function runSeed(): Promise<void> {
 }
 
 export async function ensureSeeded(): Promise<void> {
+  // Demo rows contain sample catalog content and Selar links. Never insert them
+  // into a production database unless an operator explicitly opts in.
+  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_SEED !== 'true') {
+    return;
+  }
+
   if (!seedPromise) {
     seedPromise = runSeed().catch((err) => {
       seedPromise = null;

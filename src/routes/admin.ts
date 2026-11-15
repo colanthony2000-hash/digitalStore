@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import { Router } from 'express';
@@ -38,6 +37,7 @@ import { getPermissionsForRole, hasPermission } from '../lib/rbac.ts';
 import { getEmailIntegrationStatus, sendTransactionalEmail } from '../lib/email.ts';
 import { gatherInfrastructureReport } from '../lib/infrastructure.ts';
 import { adminAuth } from '../lib/firebase-admin.ts';
+import { deleteObject, objectExists, objectKeyForUpload, objectKeyFromProductPath, putObject } from '../lib/object-storage.ts';
 import { fulfillVerifiedOrder } from './checkout.ts';
 import {
   getGoogleAnalyticsConfig,
@@ -49,16 +49,6 @@ const router = Router();
 const adminLimiter = createRateLimiter(120, 60_000);
 const adminEmailTestLimiter = createRateLimiter(5, 60 * 60_000);
 
-const PUBLIC_UPLOAD_DIR = path.resolve(process.cwd(), 'storage', 'public_uploads');
-const PROTECTED_UPLOAD_DIR = path.resolve(
-  process.cwd(),
-  'storage',
-  'protected_products'
-);
-
-fs.mkdirSync(PUBLIC_UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(PROTECTED_UPLOAD_DIR, { recursive: true });
-
 const MIME_TO_IMAGE_EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -67,13 +57,7 @@ const MIME_TO_IMAGE_EXT: Record<string, string> = {
 };
 
 const imageUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, PUBLIC_UPLOAD_DIR),
-    filename: (_req, file, cb) => {
-      const safeExt = MIME_TO_IMAGE_EXT[file.mimetype] || '.png';
-      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${safeExt}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (!MIME_TO_IMAGE_EXT[file.mimetype]) {
@@ -84,13 +68,7 @@ const imageUpload = multer({
 });
 
 const productFileUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, PROTECTED_UPLOAD_DIR),
-    filename: (_req, file, cb) => {
-      const safeExt = path.extname(file.originalname).toLowerCase();
-      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${safeExt}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
@@ -332,6 +310,8 @@ router.get('/overview', requirePermission('view_overview'), async (req: AuthRequ
           secretKeyConfigured: paystack.secretKeyConfigured,
           publicKeyConfigured: paystack.publicKeyConfigured,
           webhookSecretConfigured: paystack.webhookSecretConfigured,
+          webhookVerificationConfigured: paystack.webhookVerificationConfigured,
+          testKeyBlockedInProduction: paystack.testKeyBlockedInProduction,
           nativeCheckoutActive: paystack.nativeCheckoutActive,
         },
         pinterest: {
@@ -535,13 +515,10 @@ router.post('/support-cases/:id/actions', requirePermission('manage_support_case
         }
       }
       if (!selectedItem?.productId || !selectedProduct) return res.status(404).json({ error: 'No downloadable product is attached to the verified order.' });
-      const protectedPath = selectedProduct.protectedFilePath
-        ? path.resolve(PROTECTED_UPLOAD_DIR, path.basename(selectedProduct.protectedFilePath))
+      const protectedKey = selectedProduct.protectedFilePath
+        ? objectKeyFromProductPath(selectedProduct.protectedFilePath)
         : null;
-      let protectedFileAvailable = false;
-      if (protectedPath && protectedPath.startsWith(PROTECTED_UPLOAD_DIR + path.sep)) {
-        try { protectedFileAvailable = fs.statSync(protectedPath).isFile(); } catch { protectedFileAvailable = false; }
-      }
+      const protectedFileAvailable = protectedKey ? await objectExists(protectedKey) : false;
       if (!protectedFileAvailable) {
         return res.status(404).json({ error: 'The purchased file is not available on this service. No download link was issued.' });
       }
@@ -810,10 +787,14 @@ router.delete('/products/:id', requirePermission('manage_catalog'), requireRecen
 
 router.post('/upload/image', requirePermission('manage_catalog'), imageUpload.single('file'), async (req: AuthRequest, res) => {
   try {
-    if (!req.file) {
+    if (!req.file?.buffer) {
       return res.status(400).json({ error: 'No image file provided.' });
     }
-    const url = `/uploads/${req.file.filename}`;
+    const safeExt = MIME_TO_IMAGE_EXT[req.file.mimetype];
+    const filename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${safeExt}`;
+    const key = objectKeyForUpload('public', filename);
+    await putObject(key, req.file.buffer, req.file.mimetype);
+    const url = `/uploads/${filename}`;
     await recordAuditLog({
       adminUid: req.dbUser!.uid,
       adminEmail: req.dbUser!.email,
@@ -834,23 +815,40 @@ router.post(
   async (req: AuthRequest, res) => {
     try {
       const productId = Number(req.params.productId);
-      if (!req.file) {
+      if (!req.file?.buffer) {
         return res.status(400).json({ error: 'No digital product file provided.' });
       }
+      if (!Number.isSafeInteger(productId) || productId <= 0) {
+        return res.status(400).json({ error: 'Invalid product ID.' });
+      }
+      const [existingProduct] = await db.select({ id: products.id }).from(products).where(eq(products.id, productId)).limit(1);
+      if (!existingProduct) return res.status(404).json({ error: 'Product not found.' });
+
+      const safeExt = path.extname(req.file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '');
+      const filename = `${Date.now()}-${crypto.randomBytes(10).toString('hex')}${safeExt}`;
+      const key = objectKeyForUpload('protected', filename);
+      await putObject(key, req.file.buffer, req.file.mimetype || 'application/octet-stream');
       const sizeMb = (req.file.size / (1024 * 1024)).toFixed(2);
       const sizeLabel = req.file.size >= 1024 * 1024 ? `${sizeMb} MB` : `${Math.ceil(req.file.size / 1024)} KB`;
 
-      const [updated] = await db
-        .update(products)
-        .set({
-          protectedFilePath: req.file.filename,
-          fileSize: sizeLabel,
-          updatedAt: new Date(),
-        })
-        .where(eq(products.id, productId))
-        .returning();
+      let updated;
+      try {
+        [updated] = await db
+          .update(products)
+          .set({
+            protectedFilePath: filename,
+            fileSize: sizeLabel,
+            updatedAt: new Date(),
+          })
+          .where(eq(products.id, productId))
+          .returning();
+      } catch (error) {
+        await deleteObject(key).catch(() => undefined);
+        throw error;
+      }
 
       if (!updated) {
+        await deleteObject(key).catch(() => undefined);
         return res.status(404).json({ error: 'Product not found.' });
       }
 

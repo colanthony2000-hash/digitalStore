@@ -1,0 +1,67 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: digitalstore
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "3"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: REPLACE_WITH_RUNTIME_SERVICE_ACCOUNT
+      containerConcurrency: 4
+      timeoutSeconds: 300
+      containers:
+        - image: REPLACE_WITH_EUROPE_WEST3_ARTIFACT_REGISTRY_IMAGE
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "8080"
+            - name: APP_URL
+              value: https://digital.jeneconk.com
+            - name: SQL_POOL_MAX
+              value: "2"
+            - name: OBJECT_STORAGE_BACKEND
+              value: neon
+            - name: OBJECT_STORAGE_BUCKET
+              value: REPLACE_WITH_NEON_BUCKET_NAME
+            - name: OBJECT_STORAGE_MAX_BYTES
+              value: "4000000000"
+            - name: AWS_ENDPOINT_URL_S3
+              value: REPLACE_WITH_NEON_S3_ENDPOINT
+            - name: AWS_REGION
+              value: REPLACE_WITH_NEON_S3_SIGNING_REGION
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: digitalstore-database-url
+                  key: latest
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: digitalstore-object-storage-access-key
+                  key: latest
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: digitalstore-object-storage-secret-key
+                  key: latest
+            - name: DOWNLOAD_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: digitalstore-download-signing-secret
+                  key: latest
+            - name: PAYSTACK_ALLOW_TEST_MODE
+              value: "false"

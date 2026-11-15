@@ -1,6 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import { Router } from 'express';
 import { and, asc, desc, eq, ilike, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
@@ -29,11 +27,11 @@ import {
 } from '../lib/integrations.ts';
 import { sendTransactionalEmail } from '../lib/email.ts';
 import { recordAccountEvent } from '../lib/telemetry.ts';
+import { objectExists, objectKeyFromProductPath } from '../lib/object-storage.ts';
 
 const router = Router();
 const publicWriteLimiter = createRateLimiter(30, 60_000);
 const authEventLimiter = createRateLimiter(20, 60_000);
-const PROTECTED_STORAGE_DIR = path.resolve(process.cwd(), 'storage', 'protected_products');
 
 export function sanitizeProductForPublic(p: typeof products.$inferSelect) {
   const { protectedFilePath, ...safe } = p;
@@ -125,7 +123,7 @@ router.get('/storefront', async (_req, res) => {
         nativeCheckoutEnabled: paystack.nativeCheckoutActive,
         nativeCheckoutToggle: paystack.nativeCheckoutToggle,
         paystackConfigured: paystack.secretKeyConfigured,
-        paystackWebhookConfigured: paystack.webhookSecretConfigured,
+        paystackWebhookConfigured: paystack.webhookVerificationConfigured,
         paystackPublicKey:
           paystack.nativeCheckoutActive && paystack.publicKeyConfigured
             ? paystack.publicKey
@@ -396,17 +394,10 @@ router.post('/newsletter/subscribe', publicWriteLimiter, async (req, res) => {
         .limit(1);
 
       if (freeProd.length > 0) {
-        const filePath = freeProd[0].protectedFilePath
-          ? path.resolve(PROTECTED_STORAGE_DIR, path.basename(freeProd[0].protectedFilePath))
+        const protectedKey = freeProd[0].protectedFilePath
+          ? objectKeyFromProductPath(freeProd[0].protectedFilePath)
           : null;
-        let hasFile = false;
-        if (filePath && filePath.startsWith(PROTECTED_STORAGE_DIR + path.sep)) {
-          try {
-            hasFile = fs.statSync(filePath).isFile();
-          } catch {
-            hasFile = false;
-          }
-        }
+        const hasFile = protectedKey ? await objectExists(protectedKey) : false;
 
         if (hasFile) {
           const token = signDownloadToken({

@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 const PLACEHOLDER_FRAGMENTS = [
   'placeholder',
   'replace-with',
@@ -54,11 +56,13 @@ export interface PaystackConfigState {
   secretKeyConfigured: boolean;
   publicKeyConfigured: boolean;
   webhookSecretConfigured: boolean;
+  webhookVerificationConfigured: boolean;
   nativeCheckoutToggle: boolean;
   nativeCheckoutActive: boolean;
   secretKey: string;
   publicKey: string;
   webhookSecret: string;
+  testKeyBlockedInProduction: boolean;
 }
 
 export function getPaystackConfig(nativeToggleEnabled: boolean): PaystackConfigState {
@@ -76,20 +80,89 @@ export function getPaystackConfig(nativeToggleEnabled: boolean): PaystackConfigS
 
   const webhookSecretConfigured =
     !isPlaceholderValue(webhookSecret) && webhookSecret.length >= 16;
+  const testKeyBlockedInProduction =
+    process.env.NODE_ENV === 'production' &&
+    secretKey.startsWith('sk_test_') &&
+    process.env.PAYSTACK_ALLOW_TEST_MODE !== 'true';
 
   // Stage 2 native checkout remains disabled unless explicitly toggled AND genuine keys exist
-  const nativeCheckoutActive = nativeToggleEnabled && secretKeyConfigured;
+  const nativeCheckoutActive =
+    nativeToggleEnabled && secretKeyConfigured && !testKeyBlockedInProduction;
 
   return {
     secretKeyConfigured,
     publicKeyConfigured,
     webhookSecretConfigured,
+    webhookVerificationConfigured: webhookSecretConfigured || secretKeyConfigured,
     nativeCheckoutToggle: nativeToggleEnabled,
     nativeCheckoutActive,
     secretKey,
     publicKey,
     webhookSecret,
+    testKeyBlockedInProduction,
   };
+}
+
+function safeHexSignatureMatch(expectedHex: string, actualHex: string): boolean {
+  if (!/^[a-f0-9]{128}$/i.test(expectedHex) || !/^[a-f0-9]{128}$/i.test(actualHex)) {
+    return false;
+  }
+  const expected = Buffer.from(expectedHex, 'hex');
+  const actual = Buffer.from(actualHex, 'hex');
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+export function verifyPaystackWebhookSignature(
+  headers: {
+    paystackSignature?: string | string[];
+    legacySignature?: string | string[];
+  },
+  rawBody: Buffer,
+  config: PaystackConfigState,
+  nowMs = Date.now()
+): boolean {
+  const modernHeader = Array.isArray(headers.paystackSignature)
+    ? headers.paystackSignature[0]
+    : headers.paystackSignature;
+  if (modernHeader) {
+    if (!config.webhookSecretConfigured) return false;
+
+    let timestampText = '';
+    const v1Signatures: string[] = [];
+    for (const component of modernHeader.split(',')) {
+      const [name, ...valueParts] = component.trim().split('=');
+      const value = valueParts.join('=').trim();
+      if (name === 't') timestampText = value;
+      if (name === 'v1') {
+        const separator = value.indexOf(':');
+        v1Signatures.push(separator >= 0 ? value.slice(separator + 1) : value);
+      }
+    }
+
+    const timestamp = Number(timestampText);
+    if (
+      !Number.isInteger(timestamp) ||
+      Math.abs(Math.floor(nowMs / 1000) - timestamp) > 300 ||
+      v1Signatures.length === 0
+    ) {
+      return false;
+    }
+
+    const expectedHex = crypto.createHmac('sha512', config.webhookSecret)
+      .update(`${timestampText}.`)
+      .update(rawBody)
+      .digest('hex');
+    return v1Signatures.some((signature) => safeHexSignatureMatch(expectedHex, signature));
+  }
+
+  const legacyHeader = Array.isArray(headers.legacySignature)
+    ? headers.legacySignature[0]
+    : headers.legacySignature;
+  if (!legacyHeader || !config.secretKeyConfigured) return false;
+  const expectedHex = crypto.createHmac('sha512', config.secretKey)
+    .update(rawBody)
+    .digest('hex');
+  return safeHexSignatureMatch(expectedHex, legacyHeader);
 }
 
 export interface PinterestConfigState {

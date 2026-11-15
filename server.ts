@@ -3,10 +3,11 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
-import { db } from './src/db/index.ts';
 import { bundles, categories, products } from './src/db/schema.ts';
 import { ensureSeeded } from './src/db/seed.ts';
 import { isDownloadSigningSecretConfigured } from './src/lib/security.ts';
+import { checkDatabaseConnection, closeDbPool, db } from './src/db/index.ts';
+import { isNeonObjectStorage, isObjectStorageConfigured, localObjectPath, objectKeyForUpload, signedObjectUrl } from './src/lib/object-storage.ts';
 import publicRoutes from './src/routes/public.ts';
 import customerRoutes from './src/routes/customer.ts';
 import checkoutRoutes from './src/routes/checkout.ts';
@@ -19,9 +20,7 @@ const PORT = Number(process.env.PORT || 3000);
 app.set('trust proxy', 1);
 
 if (process.env.NODE_ENV === 'production' && !isDownloadSigningSecretConfigured()) {
-  console.error(
-    '[security] DOWNLOAD_SIGNING_SECRET is missing or placeholder in production; signed protected download links are disabled until configured.'
-  );
+  throw new Error('Production startup blocked: DOWNLOAD_SIGNING_SECRET must be configured.');
 }
 
 app.use((_req, res, next) => {
@@ -42,10 +41,40 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded public product covers & preview images
-const publicUploadDir = path.resolve(process.cwd(), 'storage', 'public_uploads');
-fs.mkdirSync(publicUploadDir, { recursive: true });
-app.use('/uploads', express.static(publicUploadDir));
+// Liveness checks do not disclose configuration or database details. Cloud Run
+// routes /health normally; /healthz remains an alias for other platforms.
+app.get(['/health', '/healthz'], (_req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/readyz', async (_req, res) => {
+  try {
+    await checkDatabaseConnection();
+    if (!isObjectStorageConfigured()) {
+      return res.status(503).json({ status: 'not_ready' });
+    }
+    res.status(200).json({ status: 'ready' });
+  } catch {
+    res.status(503).json({ status: 'not_ready' });
+  }
+});
+
+// Public catalog assets stay behind a stable app URL. Production redirects to a
+// short-lived signed URL; local development reads only the local public folder.
+app.get('/uploads/:filename', async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!/^[a-zA-Z0-9._-]{1,180}$/.test(filename)) {
+      return res.status(404).end();
+    }
+    const key = objectKeyForUpload('public', filename);
+    if (isNeonObjectStorage()) {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      return res.redirect(302, await signedObjectUrl(key, { expiresIn: 600 }));
+    }
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.sendFile(await localObjectPath(key));
+  } catch {
+    return res.status(404).end();
+  }
+});
 
 // API routes
 app.use('/api', publicRoutes);
@@ -130,16 +159,19 @@ app.get('/sitemap.xml', async (req, res) => {
 // Vite dev middleware vs static production build
 const distDir = path.resolve(process.cwd(), 'dist');
 const staticDir = process.env.VERCEL === '1' ? path.resolve(process.cwd(), 'public') : distDir;
-const isProd =
-  process.env.NODE_ENV === 'production' && fs.existsSync(path.join(staticDir, 'index.html'));
+const isProd = process.env.NODE_ENV === 'production';
+if (isProd && !fs.existsSync(path.join(staticDir, 'index.html'))) {
+  throw new Error('Production startup blocked: the built frontend was not found in dist/.');
+}
 
+let viteServer: Awaited<ReturnType<typeof import('vite')['createServer']>> | undefined;
 if (!isProd) {
   const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
+  viteServer = await createViteServer({
     server: { middlewareMode: true },
     appType: 'spa',
   });
-  app.use(vite.middlewares);
+  app.use(viteServer.middlewares);
 } else {
   const indexFile = path.join(staticDir, 'index.html');
   app.use(express.static(staticDir));
@@ -148,6 +180,37 @@ if (!isProd) {
   });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Jeneconk Digital Store running on http://0.0.0.0:${PORT}`);
+if (process.env.NODE_ENV === 'production' && !isObjectStorageConfigured()) {
+  throw new Error('Production startup blocked: configure Neon Object Storage; persistent local-disk uploads are disabled.');
+}
+
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Jeneconk Digital Store running on port ${PORT}`);
 });
+
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}; beginning graceful shutdown.`);
+  const forceExit = setTimeout(() => process.exit(1), 8000);
+  forceExit.unref();
+  httpServer.close(async (error) => {
+    try {
+      await viteServer?.close();
+      await closeDbPool();
+    } catch (closeError) {
+      console.error('Error during graceful shutdown:', closeError);
+      process.exitCode = 1;
+    }
+    clearTimeout(forceExit);
+    if (error) {
+      console.error('HTTP server shutdown error:', error);
+      process.exitCode = 1;
+    }
+  });
+  httpServer.closeIdleConnections?.();
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
