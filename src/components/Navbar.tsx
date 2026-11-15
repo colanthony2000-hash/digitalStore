@@ -77,7 +77,7 @@ export function Navbar() {
         )}
 
       <header className="bg-[#FAF8F4]/95 backdrop-blur-md border-b border-[#E4DDD0]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-[72px] flex items-center justify-between gap-4">
+        <div className="mx-auto flex h-16 w-full max-w-[1440px] items-center justify-between gap-3 px-4 sm:h-[72px] sm:px-8 lg:px-12 xl:px-16">
           {/* Zone 1: Brand Identity with Official Circular Logo */}
           <button
             type="button"
@@ -110,7 +110,7 @@ export function Navbar() {
           {/* Zone 2: Clean Single-Line Editorial Navigation */}
           <nav
             aria-label="Primary Store Navigation"
-            className="hidden lg:flex items-center gap-7 text-[13px] font-medium text-[#4A505C]"
+            className="hidden 2xl:flex items-center gap-5 text-[12px] font-medium text-[#4A505C]"
           >
             {navItems.map((item) => {
               const active = cleanPath.startsWith(item.path);
@@ -229,7 +229,7 @@ export function Navbar() {
               type="button"
               onClick={() => setMobileOpen((v) => !v)}
               aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
-              className="lg:hidden p-2 text-[#171A21] hover:bg-[#F3EEE4] rounded-sm min-h-[44px] min-w-[44px] flex items-center justify-center"
+              className="2xl:hidden p-2 text-[#171A21] hover:bg-[#F3EEE4] rounded-sm min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
@@ -263,7 +263,7 @@ export function Navbar() {
 
         {/* Responsive Mobile & Tablet Navigation Drawer */}
         {mobileOpen && (
-          <div className="lg:hidden border-t border-[#E4DDD0] bg-[#FAF8F4] px-4 py-4 space-y-1 max-h-[75vh] overflow-y-auto">
+          <div className="2xl:hidden border-t border-[#E4DDD0] bg-[#FAF8F4] px-4 py-4 space-y-1 max-h-[75vh] overflow-y-auto">
             <button
               type="button"
               onClick={() => {
