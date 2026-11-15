@@ -1,4 +1,22 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/api/$1"
+    },
+    {
+      "source": "/uploads/(.*)",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/uploads/$1"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/robots.txt"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "https://digitalstore-899601549691.europe-west3.run.app/sitemap.xml"
+    }
+  ]
 }
