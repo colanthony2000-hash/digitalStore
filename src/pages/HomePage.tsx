@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import { EcosystemIcon } from '../components/EcosystemIcon';
 import { ProductCard } from '../components/ProductCard';
-import { ProductMockup } from '../components/ProductMockup';
 import { SeoHead } from '../components/SeoHead';
 import { useStore } from '../context/StoreContext';
 import { buildSelarCheckoutUrl } from '../lib/format';
@@ -184,103 +183,90 @@ export function HomePage() {
       )}
 
       {/* 1. HERO SECTION */}
-      <section className="relative bg-[#FAF8F4] border-b border-[#E4DDD0] overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
-            <div className="lg:col-span-6 space-y-6">
-              <div className="flex items-center gap-3">
-                <span className="w-8 h-[1px] bg-[#B88329]" aria-hidden="true" />
-                <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-[#0A264A]">
-                  {settings.heroKicker || 'Jeneconk Integrated Global Solutions'}
-                </p>
-              </div>
-
-              <h1 className="font-display text-4xl sm:text-5xl lg:text-[3.3rem] font-semibold tracking-tight text-[#171A21] leading-[1.08]">
-                Practical Resources.{' '}
-                <span className="italic font-normal text-[#0A264A]">
-                  Smarter Work.
-                </span>{' '}
-                Better Living.
-              </h1>
-
-              <p className="text-base sm:text-lg text-[#4A505C] leading-relaxed max-w-xl">
-                Curated downloadable planners, educator guides, financial spreadsheets, and productivity workbooks designed for immediate use in Nigeria and worldwide.
+      <section className="relative overflow-hidden border-b border-[#E4DDD0] bg-[#FAF8F4]">
+        <div className="pointer-events-none absolute -right-40 -top-48 h-[34rem] w-[34rem] rounded-full bg-[#E7DDC7]/30 blur-3xl" />
+        <div className="relative mx-auto grid w-full max-w-[1440px] grid-cols-1 items-center gap-10 px-5 py-10 sm:px-8 sm:py-14 lg:grid-cols-2 lg:gap-16 lg:px-12 lg:py-20 xl:px-16">
+          <div className="max-w-2xl space-y-6 lg:space-y-7">
+            <div className="flex items-center gap-3">
+              <span className="h-px w-9 bg-[#B88329]" aria-hidden="true" />
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#0A264A] sm:text-[11px]">
+                {settings.heroKicker || 'Jeneconk Integrated Global Solutions'}
               </p>
-
-              <div className="pt-1 flex flex-wrap items-center gap-3.5">
-                <button
-                  type="button"
-                  onClick={() => navigate('/shop')}
-                  className="inline-flex items-center gap-2.5 px-7 py-3.5 text-sm font-semibold text-[#FAF8F4] bg-[#0A264A] hover:bg-[#061830] rounded-sm transition-colors min-h-[46px]"
-                >
-                  <span>Shop Digital Editions</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/free-resources')}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 text-sm font-medium text-[#171A21] bg-white border border-[#D5CCB9] hover:bg-[#F3EEE4] rounded-sm transition-colors min-h-[46px]"
-                >
-                  <span>Free Starter Resources</span>
-                </button>
-              </div>
-
-              <div className="pt-4 border-t border-[#E4DDD0] flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-[#6D7380]">
-                <span>Instant Digital Fulfilment</span>
-                <span aria-hidden="true">·</span>
-                <span>NGN &amp; International Checkout</span>
-                <span aria-hidden="true">·</span>
-                <a
-                  href="https://www.jeneconk.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#0A264A] hover:text-[#B88329] font-medium inline-flex items-center gap-1 transition-colors"
-                >
-                  <span>jeneconk.com</span>
-                  <ArrowUpRight className="w-3 h-3" />
-                </a>
-              </div>
             </div>
 
-            {/* Right Visual Showcase Composition */}
-            <div className="lg:col-span-6 relative">
-              <div className="relative grid grid-cols-12 gap-4 items-end">
-                <div className="col-span-12 sm:col-span-8 aspect-[4/3] sm:aspect-[4/4.2] border border-[#D5CCB9] bg-[#F3EEE4] overflow-hidden shadow-[0_24px_50px_-24px_rgba(10,26,48,0.22)]">
-                  <img
-                    src="/assets/images/hero_digital_products_1794558203570.jpg"
-                    alt="Jeneconk digital planners, financial spreadsheets, and productivity workbooks"
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+            <h1 className="max-w-[12ch] font-display text-[clamp(2.7rem,5.5vw,5.2rem)] font-medium leading-[0.98] tracking-[-0.045em] text-[#171A21]">
+              Practical resources.{' '}
+              <span className="font-normal italic text-[#0A264A]">Smarter work. Better living.</span>
+            </h1>
 
-                {heroSpotlightProduct && (
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/products/${heroSpotlightProduct.slug}`)}
-                    className="col-span-12 sm:col-span-6 sm:-ml-20 sm:mb-4 relative z-10 text-left bg-white border border-[#D5CCB9] shadow-[0_22px_45px_-16px_rgba(10,26,48,0.28)] group transition-transform duration-300 hover:-translate-y-1"
-                  >
-                    <div className="aspect-[4/4.3] border-b border-[#E4DDD0]">
-                      <ProductMockup
-                        product={heroSpotlightProduct}
-                        variant="hero"
-                      />
-                    </div>
-                    <div className="px-4 py-3 flex items-center justify-between gap-2 bg-white">
-                      <div className="min-w-0">
-                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#B88329] font-medium">
-                          Featured Edition
-                        </p>
-                        <p className="font-display font-semibold text-sm text-[#171A21] truncate">
-                          {heroSpotlightProduct.name}
-                        </p>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-[#0A264A] shrink-0 transition-transform group-hover:translate-x-0.5" />
-                    </div>
-                  </button>
-                )}
-              </div>
+            <p className="max-w-xl text-base leading-7 text-[#555B65] sm:text-lg sm:leading-8">
+              Thoughtfully made planners, educator guides and practical workbooks to help you make meaningful progress at work, at home and in the classroom.
+            </p>
+
+            <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:flex-wrap sm:items-center">
+              <button
+                type="button"
+                onClick={() => navigate('/shop')}
+                className="inline-flex min-h-12 items-center justify-center gap-3 bg-[#0A264A] px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#061830] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B88329] focus-visible:ring-offset-2"
+              >
+                <span>Explore the store</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/free-resources')}
+                className="inline-flex min-h-12 items-center justify-center border border-[#D5CCB9] bg-white/75 px-6 py-3.5 text-sm font-medium text-[#171A21] transition-colors hover:border-[#0A264A] hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A264A] focus-visible:ring-offset-2"
+              >
+                Browse free resources
+              </button>
             </div>
+
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-[#E4DDD0] pt-5 text-xs text-[#6D7380] sm:gap-x-7">
+              <span className="inline-flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-[#B88329]" /> Secure checkout</span>
+              <span className="inline-flex items-center gap-2"><Download className="h-4 w-4 text-[#B88329]" /> Instant digital access</span>
+              <a href="https://www.jeneconk.com" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-[#0A264A] transition-colors hover:text-[#B88329]">
+                jeneconk.com <ArrowUpRight className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+
+          <div className="mx-auto w-full max-w-xl lg:max-w-none">
+            <div className="relative aspect-[1.12/1] overflow-hidden border border-[#D5CCB9] bg-[#F3EEE4] shadow-[0_32px_70px_-42px_rgba(10,26,48,0.5)] sm:aspect-[1.22/1]">
+              <img
+                src="/assets/images/hero_digital_products_1794558203570.jpg"
+                alt="A calm, organised workspace with digital planning tools"
+                referrerPolicy="no-referrer"
+                className="h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#071B36]/70 via-transparent to-transparent" />
+              <div className="absolute bottom-0 left-0 right-0 p-5 text-white sm:p-7">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#F0C66E]">Made for real life</p>
+                <p className="mt-2 max-w-sm font-display text-2xl leading-tight sm:text-3xl">A little more clarity in every day.</p>
+              </div>
+              <span className="absolute right-4 top-4 border border-white/50 bg-[#FAF8F4]/90 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#0A264A]">Digital editions</span>
+            </div>
+
+            {heroSpotlightProduct && (
+              <button
+                type="button"
+                onClick={() => navigate(`/products/${heroSpotlightProduct.slug}`)}
+                className="group mt-4 flex w-full items-center gap-4 border border-[#E4DDD0] bg-white p-3 text-left shadow-[0_14px_36px_-30px_rgba(10,26,48,0.55)] transition-all hover:border-[#C5BA9F] hover:shadow-[0_18px_42px_-28px_rgba(10,26,48,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A264A] sm:mt-5 sm:gap-5 sm:p-4"
+              >
+                <span className="flex h-20 w-16 shrink-0 items-center justify-center overflow-hidden border border-[#E4DDD0] bg-[#F3EEE4] sm:h-24 sm:w-[4.5rem]">
+                  {heroSpotlightProduct.coverImage ? (
+                    <img src={heroSpotlightProduct.coverImage} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="px-2 text-center font-display text-xs font-semibold leading-tight text-[#0A264A]">{heroSpotlightProduct.name}</span>
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-[#B88329]">Featured edition</span>
+                  <span className="mt-1 block truncate font-display text-base font-semibold text-[#171A21] sm:text-lg">{heroSpotlightProduct.name}</span>
+                  <span className="mt-1 block text-xs text-[#6D7380]">Discover this resource <span aria-hidden="true">→</span></span>
+                </span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-[#0A264A] transition-transform group-hover:translate-x-1" />
+              </button>
+            )}
           </div>
         </div>
       </section>
