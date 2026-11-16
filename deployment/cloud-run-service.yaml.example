@@ -9,7 +9,7 @@ spec:
     metadata:
       annotations:
         autoscaling.knative.dev/minScale: "0"
-        autoscaling.knative.dev/maxScale: "3"
+        autoscaling.knative.dev/maxScale: "1"
         run.googleapis.com/execution-environment: gen2
     spec:
       serviceAccountName: REPLACE_WITH_RUNTIME_SERVICE_ACCOUNT
@@ -23,7 +23,7 @@ spec:
           resources:
             limits:
               cpu: "1"
-              memory: 1Gi
+              memory: 512Mi
           env:
             - name: NODE_ENV
               value: production

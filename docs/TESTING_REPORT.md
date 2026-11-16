@@ -1,5 +1,9 @@
 # Jeneconk Digital Store — Current Verification Report
 
+Updated 16 November 2026. Production is now deployed: Vercel serves `digital.jeneconk.com` and Cloud Run serves the Express API. Live smoke checks returned HTTP 200 for `/`, `/shop`, `/account`, `/admin`, `/health`, `/readyz`, `/robots.txt`, `/sitemap.xml`, and `/api/storefront`; the catalog returned four products and six categories. All four catalog Selar URLs returned HTTP 200. These are availability checks, not completed account, payment, email, or download transactions.
+
+The detailed staging and recovery checks below are historical records from before production launch. Their “not verified” section describes workflows that still need end-to-end verification, not the absence of a production deployment. See the [Deployment Guide](DEPLOYMENT_GUIDE.md) for the current architecture and operational settings.
+
 This report covers repository preparation and the authorized isolated staging checks. It supersedes the older snapshot report, whose table counts and runtime checks have not been rerun against the current application. It is not a production release approval.
 
 ## Checks performed

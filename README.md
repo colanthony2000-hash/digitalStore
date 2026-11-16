@@ -5,7 +5,8 @@ Official digital products marketplace for **Jeneconk Integrated Global Solutions
 ## Architecture Summary
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4 (`src/`)
 - **Backend**: Express 4 TypeScript server (`server.ts`, `src/routes/*`)
-- **Database**: PostgreSQL (Cloud SQL) with Drizzle ORM (`src/db/schema.ts`, `src/db/index.ts`, `src/db/seed.ts`)
+- **Database**: Neon PostgreSQL (Frankfurt) with Drizzle ORM (`DATABASE_URL`; `src/db/schema.ts`, `src/db/index.ts`)
+- **Hosting**: Vercel serves the static Vite frontend and proxies API requests to the Express service on Google Cloud Run (`europe-west3`).
 - **Authentication**: Firebase Authentication (Google Sign-In) with server-side ID token verification via `firebase-admin` (`src/middleware/auth.ts`)
 - **Payments & Fulfilment**:
   - **Stage 1 (Active Default)**: External marketplace checkout via verified Selar URLs configured in the Admin Dashboard (`marketplaceUrl`), plus UTM outbound click tracking.
@@ -17,12 +18,12 @@ Official digital products marketplace for **Jeneconk Integrated Global Solutions
    ```bash
    npm install
    ```
-2. Configure environment variables based on `.env.example` (Cloud SQL `SQL_*`, `APP_URL`, `DOWNLOAD_SIGNING_SECRET`, `ADMIN_EMAILS`, and optional Paystack/Pinterest credentials).
-3. Push the PostgreSQL schema via Drizzle Kit:
+2. Configure `.env` from `.env.example` using a **disposable development database** and local object storage. Keep production credentials in managed secrets; do not point local schema commands at production or the preserved AI Studio Cloud SQL source.
+3. If the disposable database needs a schema, push it with Drizzle Kit:
    ```bash
    npx drizzle-kit push --config=src/db/drizzle.config.ts
    ```
-4. Run TypeScript typechecking and production build:
+4. Run TypeScript typechecking and a production build:
    ```bash
    npm run lint
    npm run build
@@ -31,6 +32,8 @@ Official digital products marketplace for **Jeneconk Integrated Global Solutions
    ```bash
    npm run dev
    ```
+
+Production infrastructure and the current rollout status are documented in the [Deployment Guide](docs/DEPLOYMENT_GUIDE.md). The legacy `SQL_*` variables are optional compatibility settings; `DATABASE_URL` takes precedence.
 
 ## Documentation
 - [Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
