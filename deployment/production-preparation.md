@@ -1,4 +1,6 @@
-# Digital Store production preparation
+# Digital Store production preparation — historical notes
+
+> **Historical snapshot.** This document records preparation and staging decisions made before production launch. It contains proposed values and statements such as “no production service” that are no longer current. Do not use it as the live deployment status. See [`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md) and [`docs/TESTING_REPORT.md`](../docs/TESTING_REPORT.md) for current production details.
 
 This document records the production deployment preparation and the separately authorized isolated staging setup. Staging Cloud Run, Neon, Artifact Registry, and Secret Manager resources now exist. No production service, DNS, production environment, email delivery, or Cloud SQL source was changed. The supplied Cloud SQL export was restored and checked in a disposable PostgreSQL instance; the source remains untouched.
 
@@ -24,7 +26,7 @@ This document records the production deployment preparation and the separately a
 - `deployment/cloud-run-service.yaml.example` is a template only. Replace all `REPLACE_WITH_*` values and create the named secret versions before using it.
 - `.env.example` documents variable names only. Do not put actual credentials in it.
 
-### Recommended first deployment settings
+### Original first-deployment proposal (superseded)
 
 - Cloud Run region: `europe-west3` (Frankfurt), alongside the Neon Frankfurt project.
 - Billing: request-based; minimum instances 0; maximum instances 3; concurrency 4; timeout 300 seconds.
