@@ -572,6 +572,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const currentUser = auth.currentUser;
       if (currentUser) {
         await currentUser.reload();
+        setFirebaseUser(currentUser);
         await currentUser.getIdToken(true);
         await syncAccountProfile(currentUser);
         if (!changingEmail) {
