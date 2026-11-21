@@ -153,6 +153,10 @@ export function AccountPage() {
   const [verifiedReceipt, setVerifiedReceipt] = useState<any>(null);
   const [correctedEmail, setCorrectedEmail] = useState('');
   const [requestingEmailChange, setRequestingEmailChange] = useState(false);
+  const [emailChangeFeedback, setEmailChangeFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const customerDisplayName =
     fullName.trim() || profile?.fullName?.trim() || firebaseUser?.displayName?.trim() || '';
   const customerFirstName = customerDisplayName.split(/\s+/)[0];
@@ -241,11 +245,16 @@ export function AccountPage() {
 
   const handleEmailCorrection = async (event: React.FormEvent) => {
     event.preventDefault();
+    setEmailChangeFeedback(null);
     setRequestingEmailChange(true);
     const result = await requestEmailCorrection(correctedEmail);
     setRequestingEmailChange(false);
-    setStatusMessage(result.message || null);
-    if (result.ok) setCorrectedEmail('');
+    setEmailChangeFeedback({
+      type: result.ok ? 'success' : 'error',
+      message: result.ok
+        ? `Verification email sent to ${correctedEmail.trim()}. Open that inbox and click the newest link. Your account email changes only after you confirm it; then return here or sign in again with the corrected address.`
+        : result.message || 'We could not send the verification email. Please try again.',
+    });
   };
 
   const loadAccountData = useCallback(async () => {
@@ -1127,7 +1136,7 @@ export function AccountPage() {
               <form onSubmit={handleEmailCorrection} className="grid grid-cols-1 gap-2 border-t border-amber-200 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <div>
                   <label htmlFor="corrected-account-email" className="mb-1 block text-xs font-semibold text-amber-950">
-                    Email entered incorrectly?
+                    Email entered incorrectly? Enter the correct address
                   </label>
                   <input
                     id="corrected-account-email"
@@ -1135,7 +1144,10 @@ export function AccountPage() {
                     required
                     autoComplete="email"
                     value={correctedEmail}
-                    onChange={(event) => setCorrectedEmail(event.target.value)}
+                    onChange={(event) => {
+                      setCorrectedEmail(event.target.value);
+                      setEmailChangeFeedback(null);
+                    }}
                     placeholder="Enter the correct email address"
                     className="w-full border border-amber-300 bg-white px-3.5 py-2.5 text-sm text-[#171A21] focus:outline-none focus:ring-2 focus:ring-[#0A264A]"
                   />
@@ -1145,8 +1157,21 @@ export function AccountPage() {
                   disabled={requestingEmailChange}
                   className="inline-flex min-h-11 items-center justify-center border border-[#0A264A] bg-white px-4 py-2.5 text-xs font-semibold text-[#0A264A] hover:bg-amber-100 disabled:opacity-60"
                 >
-                  {requestingEmailChange ? 'Sending…' : 'Change email securely'}
+                  {requestingEmailChange ? 'Sending verification…' : 'Send verification link'}
                 </button>
+                {emailChangeFeedback && (
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className={`sm:col-span-2 border px-3.5 py-3 text-sm leading-relaxed ${
+                      emailChangeFeedback.type === 'success'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                        : 'border-rose-200 bg-rose-50 text-rose-900'
+                    }`}
+                  >
+                    {emailChangeFeedback.message}
+                  </p>
+                )}
               </form>
             </div>
           )}
