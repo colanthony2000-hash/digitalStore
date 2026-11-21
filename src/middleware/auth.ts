@@ -238,6 +238,23 @@ export const requireActiveAccount = (
   next();
 };
 
+export const requireVerifiedEmail = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!req.dbUser || !req.user) {
+    return res.status(401).json({ error: 'Unauthorized: Authentication required.' });
+  }
+  if (!req.user.email_verified || !req.dbUser.emailVerified) {
+    return res.status(403).json({
+      code: 'EMAIL_VERIFICATION_REQUIRED',
+      error: 'Verify your account email before using protected customer features.',
+    });
+  }
+  next();
+};
+
 export const optionalAuth = async (
   req: AuthRequest,
   _res: Response,
@@ -272,6 +289,12 @@ export const requireAdmin = async (
   next: NextFunction
 ) => {
   await requireAuth(req, res, () => {
+    if (!req.user?.email_verified || !req.dbUser?.emailVerified) {
+      return res.status(403).json({
+        code: 'EMAIL_VERIFICATION_REQUIRED',
+        error: 'A verified email address is required for operations console access.',
+      });
+    }
     if (!req.dbUser || !isAdminConsoleRole(req.dbUser.role)) {
       return res.status(403).json({
         error: 'Forbidden: Operations console access is required for this resource.',

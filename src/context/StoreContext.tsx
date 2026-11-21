@@ -23,6 +23,7 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
   updateProfile,
+  verifyBeforeUpdateEmail,
   verifyPasswordResetCode,
   type User as FirebaseUser,
 } from 'firebase/auth';
@@ -80,6 +81,8 @@ interface StoreContextValue {
   signInWithGoogle: (rememberMe?: boolean) => Promise<AuthActionResult>;
   sendPasswordReset: (email: string) => Promise<AuthActionResult>;
   resendVerificationEmail: () => Promise<AuthActionResult>;
+  requestEmailCorrection: (email: string) => Promise<AuthActionResult>;
+  inspectVerificationCode: (oobCode: string) => Promise<{ ok: boolean; email?: string; message?: string }>;
   verifyResetOobCode: (oobCode: string) => Promise<{ ok: boolean; email?: string; message?: string }>;
   confirmResetOobCode: (oobCode: string, newPassword: string) => Promise<AuthActionResult>;
   applyVerificationOobCode: (oobCode: string) => Promise<AuthActionResult>;
@@ -469,6 +472,58 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const requestEmailCorrection = async (email: string): Promise<AuthActionResult> => {
+    const user = auth.currentUser;
+    const cleanEmail = email.trim().toLowerCase();
+    if (!user) return { ok: false, message: 'Sign in first to correct your email address.' };
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return { ok: false, message: 'Enter a valid email address.' };
+    }
+    if (cleanEmail === user.email?.trim().toLowerCase()) {
+      return { ok: false, message: 'That is already the email address on this account.' };
+    }
+    try {
+      await verifyBeforeUpdateEmail(user, cleanEmail, {
+        url: `${window.location.origin}/account`,
+        handleCodeInApp: false,
+      });
+      return {
+        ok: true,
+        message: `We sent a confirmation link to ${cleanEmail}. Your account email changes only after you confirm that link.`,
+      };
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code === 'auth/requires-recent-login') {
+        return { ok: false, message: 'For your security, sign out and sign back in, then request the email change again.' };
+      }
+      if (code === 'auth/email-already-in-use') {
+        return { ok: false, message: 'That email is already attached to another account. Sign in to that account or use a different email.' };
+      }
+      if (code === 'auth/invalid-email') {
+        return { ok: false, message: 'Enter a valid email address.' };
+      }
+      if (code === 'auth/too-many-requests') {
+        return { ok: false, message: 'Too many requests. Please wait a few minutes and try again.' };
+      }
+      return { ok: false, message: 'We could not send the email-change link. Check the address and try again.' };
+    }
+  };
+
+  const inspectVerificationCode = async (oobCode: string) => {
+    try {
+      const info = await checkActionCode(auth, oobCode);
+      return { ok: true, email: info.data.email || undefined };
+    } catch (err: any) {
+      if (err?.code === 'auth/expired-action-code') {
+        return { ok: false, message: 'This link has expired. Sign in and request a fresh verification link.' };
+      }
+      if (err?.code === 'auth/invalid-action-code') {
+        return { ok: false, message: 'This link has already been used or is no longer valid. Sign in to check your email status or request a fresh link.' };
+      }
+      return { ok: false, message: 'We could not validate this link. Check your connection or request a fresh link.' };
+    }
+  };
+
   const verifyResetOobCode = async (oobCode: string) => {
     try {
       const email = await verifyPasswordResetCode(auth, oobCode);
@@ -509,25 +564,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const actionInfo = await checkActionCode(auth, oobCode);
       const actionEmail = actionInfo.data.email?.trim().toLowerCase() || '';
+      const changingEmail = String(actionInfo.operation)
+        .toLowerCase()
+        .replace(/[_-]/g, '')
+        .includes('changeemail');
       await applyActionCode(auth, oobCode);
       const currentUser = auth.currentUser;
-      if (
-        currentUser &&
-        actionEmail &&
-        currentUser.email?.trim().toLowerCase() === actionEmail
-      ) {
+      if (currentUser) {
         await currentUser.reload();
         await currentUser.getIdToken(true);
-        await logAuthTelemetry('email_verified', 'Email address verified via link.', currentUser);
         await syncAccountProfile(currentUser);
-        return {
-          ok: true,
-          message: 'Your email is verified. You’re all set.',
-        };
+        if (!changingEmail) {
+          await logAuthTelemetry('email_verified', 'Email address verified via link.', currentUser);
+        }
       }
+      const verifiedInCurrentSession = Boolean(
+        !changingEmail &&
+        currentUser?.emailVerified &&
+        currentUser.email?.trim().toLowerCase() === actionEmail
+      );
       return {
         ok: true,
-        message: actionEmail
+        message: changingEmail
+          ? `Your email address has been changed to ${actionInfo.data.email}. Sign in again with that address if needed.`
+          : verifiedInCurrentSession
+          ? 'Your email is verified. You’re all set.'
+          : actionEmail
           ? `Email verified for ${actionInfo.data.email}. Sign in with that address to continue.`
           : 'Your email address is now verified. Sign in to continue.',
       };
@@ -690,6 +752,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         signInWithGoogle,
         sendPasswordReset,
         resendVerificationEmail,
+        requestEmailCorrection,
+        inspectVerificationCode,
         verifyResetOobCode,
         confirmResetOobCode,
         applyVerificationOobCode,
