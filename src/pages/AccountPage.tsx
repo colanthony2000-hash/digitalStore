@@ -86,6 +86,8 @@ export function AccountPage() {
     signInWithGoogle,
     sendPasswordReset,
     resendVerificationEmail,
+    requestEmailCorrection,
+    inspectVerificationCode,
     verifyResetOobCode,
     confirmResetOobCode,
     applyVerificationOobCode,
@@ -124,12 +126,14 @@ export function AccountPage() {
 
   // Firebase email action link (?mode=...&oobCode=...) state
   const [oobState, setOobState] = useState<{
-    mode: 'resetPassword' | 'verifyEmail' | null;
+    mode: 'resetPassword' | 'verifyEmail' | 'verifyAndChangeEmail' | null;
     oobCode: string | null;
     checking: boolean;
     verifiedEmailForReset?: string;
     error?: string;
     completedMessage?: string;
+    actionEmail?: string;
+    actionApplied?: boolean;
   }>({ mode: null, oobCode: null, checking: false });
   const [newOobPassword, setNewOobPassword] = useState('');
   const [confirmOobPassword, setConfirmOobPassword] = useState('');
@@ -147,6 +151,11 @@ export function AccountPage() {
   const [accountError, setAccountError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [verifiedReceipt, setVerifiedReceipt] = useState<any>(null);
+  const [correctedEmail, setCorrectedEmail] = useState('');
+  const [requestingEmailChange, setRequestingEmailChange] = useState(false);
+  const customerDisplayName =
+    fullName.trim() || profile?.fullName?.trim() || firebaseUser?.displayName?.trim() || '';
+  const customerFirstName = customerDisplayName.split(/\s+/)[0];
 
   // New Support Case inside Account Dashboard
   const [showNewCaseForm, setShowNewCaseForm] = useState(false);
@@ -160,12 +169,14 @@ export function AccountPage() {
   const pwEval = useMemo(() => evaluatePassword(regPassword), [regPassword]);
   const oobPwEval = useMemo(() => evaluatePassword(newOobPassword), [newOobPassword]);
 
-  // Handle Firebase Action Link query params (?mode=resetPassword&oobCode=... or verifyEmail)
+  // Validate verification links without consuming their one-time code on page load.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const mode = params.get('mode');
     const oobCode = params.get('oobCode');
-    if (!oobCode || (mode !== 'resetPassword' && mode !== 'verifyEmail')) return;
+    const supportedMode =
+      mode === 'resetPassword' || mode === 'verifyEmail' || mode === 'verifyAndChangeEmail';
+    if (!oobCode || !supportedMode) return;
 
     let cancelled = false;
     setOobState({ mode, oobCode, checking: true });
@@ -189,15 +200,18 @@ export function AccountPage() {
           });
         }
       });
-    } else if (mode === 'verifyEmail') {
-      applyVerificationOobCode(oobCode).then((res) => {
+    } else {
+      inspectVerificationCode(oobCode).then((res) => {
         if (cancelled) return;
         setOobState({
-          mode: 'verifyEmail',
+          mode,
           oobCode,
           checking: false,
-          completedMessage: res.ok ? res.message : undefined,
+          actionEmail: res.email,
           error: res.ok ? undefined : res.message,
+          completedMessage: res.ok
+            ? `Confirm that ${res.email || 'this email address'} belongs to you by selecting the button below.`
+            : undefined,
         });
       });
     }
@@ -205,7 +219,34 @@ export function AccountPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath, applyVerificationOobCode, verifyResetOobCode]);
+  }, [currentPath]);
+
+  const handleConfirmEmailAction = async () => {
+    if (!oobState.oobCode) return;
+    setSubmittingAuth(true);
+    const result = await applyVerificationOobCode(oobState.oobCode);
+    setSubmittingAuth(false);
+    setOobState((state) => ({
+      ...state,
+      checking: false,
+      actionApplied: result.ok,
+      completedMessage: result.ok ? result.message : undefined,
+      error: result.ok ? undefined : result.message,
+    }));
+    if (result.ok) {
+      window.history.replaceState({}, '', '/account');
+      await refreshAccountProfile().catch(() => false);
+    }
+  };
+
+  const handleEmailCorrection = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setRequestingEmailChange(true);
+    const result = await requestEmailCorrection(correctedEmail);
+    setRequestingEmailChange(false);
+    setStatusMessage(result.message || null);
+    if (result.ok) setCorrectedEmail('');
+  };
 
   const loadAccountData = useCallback(async () => {
     if (!firebaseUser) return;
@@ -497,7 +538,7 @@ export function AccountPage() {
       )}
 
       {/* Firebase OOB Password Reset or Email Verification Action Handler */}
-      {oobState.mode === 'verifyEmail' && (
+      {(oobState.mode === 'verifyEmail' || oobState.mode === 'verifyAndChangeEmail') && (
         <div
           className={`rounded-sm border p-5 ${
             oobState.error
@@ -507,9 +548,23 @@ export function AccountPage() {
         >
           <p className="text-sm font-medium">
             {oobState.checking
-              ? 'Verifying your email address...'
+              ? 'Checking your email link...'
               : oobState.error || oobState.completedMessage}
           </p>
+          {!oobState.checking && !oobState.error && !oobState.actionApplied && (
+            <button
+              type="button"
+              disabled={submittingAuth}
+              onClick={handleConfirmEmailAction}
+              className="mt-4 inline-flex min-h-11 items-center justify-center bg-[#0A264A] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#061830] disabled:opacity-60"
+            >
+              {submittingAuth
+                ? 'Confirming…'
+                : oobState.mode === 'verifyAndChangeEmail'
+                ? 'Confirm email change'
+                : 'Verify my email'}
+            </button>
+          )}
         </div>
       )}
 
@@ -964,7 +1019,7 @@ export function AccountPage() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="font-display text-2xl sm:text-3xl font-semibold text-[#171A21]">
-                  Customer Dashboard
+                  {customerFirstName ? `Welcome, ${customerFirstName}` : 'Customer Dashboard'}
                 </h1>
                 {firebaseUser.emailVerified ? (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-sm">
@@ -1028,17 +1083,17 @@ export function AccountPage() {
 
           {/* Unverified Email Banner */}
           {!firebaseUser.emailVerified && (
-            <div className="bg-amber-50 border border-amber-200 rounded-sm p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-sm p-5 space-y-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2 text-amber-950 font-semibold text-sm">
                   <MailCheck className="w-4 h-4" />
                   <span>Verify Your Email Address</span>
                 </div>
                 <p className="text-xs text-amber-900 leading-relaxed">
-                  Confirming your email unlocks full account protection and order-to-account recovery support.
+                  We sent the link to <strong>{firebaseUser.email}</strong>. Check that this address is correct. Until it is verified, order history, support requests, protected downloads and admin access are unavailable.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 shrink-0">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={async () => {
@@ -1069,6 +1124,30 @@ export function AccountPage() {
                   <span>I&apos;ve Verified</span>
                 </button>
               </div>
+              <form onSubmit={handleEmailCorrection} className="grid grid-cols-1 gap-2 border-t border-amber-200 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <div>
+                  <label htmlFor="corrected-account-email" className="mb-1 block text-xs font-semibold text-amber-950">
+                    Email entered incorrectly?
+                  </label>
+                  <input
+                    id="corrected-account-email"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={correctedEmail}
+                    onChange={(event) => setCorrectedEmail(event.target.value)}
+                    placeholder="Enter the correct email address"
+                    className="w-full border border-amber-300 bg-white px-3.5 py-2.5 text-sm text-[#171A21] focus:outline-none focus:ring-2 focus:ring-[#0A264A]"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={requestingEmailChange}
+                  className="inline-flex min-h-11 items-center justify-center border border-[#0A264A] bg-white px-4 py-2.5 text-xs font-semibold text-[#0A264A] hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {requestingEmailChange ? 'Sending…' : 'Change email securely'}
+                </button>
+              </form>
             </div>
           )}
 

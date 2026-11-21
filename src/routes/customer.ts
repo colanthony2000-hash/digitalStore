@@ -16,6 +16,7 @@ import {
 import {
   requireActiveAccount,
   requireAuth,
+  requireVerifiedEmail,
   type AuthRequest,
 } from '../middleware/auth.ts';
 import { adminAuth } from '../lib/firebase-admin.ts';
@@ -35,6 +36,25 @@ const customerWriteLimiter = createRateLimiter(30, 60_000);
 router.get('/account/me', requireAuth, async (req: AuthRequest, res) => {
   try {
     const dbUser = req.dbUser!;
+
+    if (!req.user?.email_verified || !dbUser.emailVerified) {
+      const { internalNotes: _hiddenNotes, ...safeUser } = dbUser;
+      return res.json({
+        user: {
+          ...safeUser,
+          role: 'customer',
+          permissions: [],
+        },
+        orders: [],
+        downloads: [],
+        enquiries: [],
+        supportCases: [],
+        activityTimeline: [],
+        marketplaceNotice:
+          'Verify your email to access customer records and protected account features.',
+        emailVerificationRequired: true,
+      });
+    }
 
     const [userOrders, downloads, enquiries, cases, timeline] = await Promise.all([
       db
@@ -210,6 +230,7 @@ router.post(
   '/account/support-cases',
   requireAuth,
   requireActiveAccount,
+  requireVerifiedEmail,
   customerWriteLimiter,
   async (req: AuthRequest, res) => {
     try {
@@ -317,6 +338,7 @@ router.post(
   '/account/download-link',
   requireAuth,
   requireActiveAccount,
+  requireVerifiedEmail,
   async (req: AuthRequest, res) => {
     try {
       const { orderItemId } = req.body || {};

@@ -222,7 +222,11 @@ export function Navbar() {
               className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#FAF8F4] bg-[#0A264A] hover:bg-[#061830] rounded-sm transition-colors whitespace-nowrap shrink-0 min-h-[40px]"
             >
               <User className="w-3.5 h-3.5" />
-              <span>{firebaseUser ? 'Account' : 'Sign In'}</span>
+              <span className="max-w-40 truncate">
+                {firebaseUser
+                  ? profile?.fullName || firebaseUser.displayName || 'Account'
+                  : 'Sign In'}
+              </span>
             </button>
 
             <button
@@ -308,7 +312,9 @@ export function Navbar() {
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-semibold text-[#FAF8F4] bg-[#0A264A] rounded-sm min-h-[44px]"
               >
-                {firebaseUser ? 'Customer Account' : 'Sign In'}
+                {firebaseUser
+                  ? profile?.fullName || firebaseUser.displayName || 'Customer Account'
+                  : 'Sign In'}
               </button>
               {isConsoleAuthorized && (
                 <button
