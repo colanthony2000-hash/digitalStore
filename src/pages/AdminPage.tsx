@@ -187,6 +187,7 @@ export function AdminPage() {
   const [contentsText, setContentsText] = useState('');
   const [benefitsText, setBenefitsText] = useState('');
   const [audienceText, setAudienceText] = useState('');
+  const [previewImagesText, setPreviewImagesText] = useState('');
   const [faqsDraft, setFaqsDraft] = useState<{ question: string; answer: string }[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingProtected, setUploadingProtected] = useState(false);
@@ -299,6 +300,7 @@ export function AdminPage() {
       setContentsText('');
       setBenefitsText('');
       setAudienceText('');
+      setPreviewImagesText('');
       setFaqsDraft([]);
       return;
     }
@@ -318,6 +320,7 @@ export function AdminPage() {
     setContentsText((p.contentsList || []).join('\n'));
     setBenefitsText((p.keyBenefits || []).join('\n'));
     setAudienceText((p.intendedAudience || []).join('\n'));
+    setPreviewImagesText((p.previewImages || []).join('\n'));
     setFaqsDraft(Array.isArray(p.faqs) ? p.faqs.map((f) => ({ ...f })) : []);
   };
 
@@ -354,6 +357,10 @@ export function AdminPage() {
           .map((s) => s.trim())
           .filter(Boolean),
         intendedAudience: audienceText
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        previewImages: previewImagesText
           .split('\n')
           .map((s) => s.trim())
           .filter(Boolean),
@@ -1695,6 +1702,22 @@ export function AdminPage() {
                         </div>
                       </div>
                     )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      Product Preview Images (one URL per line)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={previewImagesText}
+                      onChange={(e) => setPreviewImagesText(e.target.value)}
+                      placeholder="/assets/images/data_analysis_factory_floor_hero.png\n/assets/images/data_analysis_factory_floor_inside_preview.png"
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      These appear in the product image gallery. The cover image is shown first.
+                    </p>
                   </div>
 
                   {/* Instructions, Requirements, Licence & SEO */}
